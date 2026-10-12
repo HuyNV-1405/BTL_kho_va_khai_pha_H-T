@@ -1,0 +1,89 @@
+services:
+  # ----------------------------------------------------------------------------
+  # 1. MINIO (DATA LAKE S3 COMPATIBLE)
+  # ----------------------------------------------------------------------------
+  minio:
+    image: quay.io/minio/minio:latest
+    container_name: dwh_minio
+    restart: always
+    ports:
+      - "9000:9000"   # S3 API Endpoint
+      - "9001:9001"   # Web Console UI
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Tự động tạo 3 buckets: raw, staging, curated
+  minio-init:
+    image: quay.io/minio/mc:latest
+    container_name: dwh_minio_init
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      sleep 3;
+      mc alias set local http://minio:9000 minioadmin minioadmin123;
+      mc mb -p local/raw local/staging local/curated;
+      echo '✅ Buckets [raw, staging, curated] initialized successfully!';
+      exit 0;
+      "
+
+  # ----------------------------------------------------------------------------
+  # 2. POSTGRESQL (DATA WAREHOUSE DATABASE)
+  # ----------------------------------------------------------------------------
+  postgres:
+    image: postgres:15
+    container_name: dwh_postgres
+    restart: always
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: dataeng
+      POSTGRES_PASSWORD: dataeng123
+      POSTGRES_DB: dwh
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dataeng -d dwh"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ----------------------------------------------------------------------------
+  # 3. APACHE SUPERSET (BUSINESS INTELLIGENCE & DASHBOARDS)
+  # ----------------------------------------------------------------------------
+  superset:
+    build:
+      context: ./superset
+      dockerfile: Dockerfile
+    container_name: dwh_superset
+    restart: always
+    ports:
+      - "8088:8088"
+    environment:
+      SUPERSET_SECRET_KEY: "super_secret_key_data_engineering_retail_dwh_2026"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - superset_home:/app/superset_home
+    command: >
+      sh -c "
+      superset fab create-admin --username admin --firstname Admin --lastname Admin --email admin@dwh.local --password admin || true;
+      superset db upgrade;
+      superset init;
+      /usr/bin/run-server.sh
+      "
+
+volumes:
+  minio_data:
+  pg_data:
+  superset_home:

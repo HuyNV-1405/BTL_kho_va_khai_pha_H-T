@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+
+# Source and processed transaction data
+data/raw/
+data/processed/
+
+# Local databases and generated outputs
+database/*.db
+outputs/*.csv
+
+# Operating-system files
+.DS_Store
+Thumbs.db

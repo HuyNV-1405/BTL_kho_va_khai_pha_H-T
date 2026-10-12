@@ -1,0 +1,262 @@
+"""
+File: 04_run_olap_queries.py
+Mô tả: Tự động thực thi các truy vấn OLAP & Phân tích Nâng cao từ Kho Dữ Liệu retail_dwh.db
+"""
+
+import os
+import sqlite3
+import pandas as pd
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+def run_olap_analysis(db_file=None):
+    if db_file is None:
+        db_file = os.path.join(BASE_DIR, "database", "retail_dwh.db")
+    conn = sqlite3.connect(db_file)
+    pd.set_option('display.max_columns', 15)
+    pd.set_option('display.width', 1000)
+    
+    print("=" * 80)
+    print("BÁO CÁO PHÂN TÍCH ĐA CHIỀU OLAP & ADVANCED SQL - ONLINE RETAIL DWH")
+    print("=" * 80)
+
+    # -------------------------------------------------------------------------
+    # BÀI TOÁN 1: DOANH THU THEO THỜI GIAN & TĂNG TRƯỞNG MoM
+    # -------------------------------------------------------------------------
+    print("\n[BÀI TOÁN 1] DOANH THU THEO THÁNG & TỐC ĐỘ TĂNG TRƯỞNG (MoM GROWTH %)")
+    print("-" * 80)
+    q1 = """
+    WITH MonthlySales AS (
+        SELECT 
+            d.Year, d.Month, d.YearMonth,
+            COUNT(DISTINCT f.InvoiceNo) AS TotalOrders,
+            SUM(f.Quantity) AS TotalUnitsSold,
+            ROUND(SUM(f.TotalRevenue), 2) AS MonthlyRevenue
+        FROM Fact_Sales f
+        JOIN Dim_Date d ON f.DateKey = d.DateKey
+        GROUP BY d.Year, d.Month, d.YearMonth
+    )
+    SELECT 
+        YearMonth, TotalOrders, TotalUnitsSold, MonthlyRevenue,
+        LAG(MonthlyRevenue, 1) OVER (ORDER BY Year, Month) AS PrevMonthRevenue,
+        ROUND((MonthlyRevenue - LAG(MonthlyRevenue, 1) OVER (ORDER BY Year, Month)) * 100.0 
+              / LAG(MonthlyRevenue, 1) OVER (ORDER BY Year, Month), 2) AS MoM_Growth_Pct,
+        ROUND(SUM(MonthlyRevenue) OVER (PARTITION BY Year ORDER BY Month), 2) AS YTD_Running_Total
+    FROM MonthlySales
+    ORDER BY Year, Month;
+    """
+    df_q1 = pd.read_sql_query(q1, conn)
+    print(df_q1.to_string(index=False))
+
+    # -------------------------------------------------------------------------
+    # BÀI TOÁN 2: PHÂN TÍCH THỊ TRƯỜNG ĐỊA LÝ & TỶ TRỌNG
+    # -------------------------------------------------------------------------
+    print("\n\n[BÀI TOÁN 2] TOP 10 THỊ TRƯỜNG ĐỊA LÝ & TỶ TRỌNG DOANH THU TOÀN CẦU")
+    print("-" * 80)
+    q2 = """
+    WITH CountrySales AS (
+        SELECT 
+            l.Country, l.RegionType,
+            COUNT(DISTINCT f.InvoiceNo) AS TotalInvoices,
+            COUNT(DISTINCT f.CustomerKey) AS TotalCustomers,
+            SUM(f.Quantity) AS TotalUnits,
+            ROUND(SUM(f.TotalRevenue), 2) AS CountryRevenue
+        FROM Fact_Sales f
+        JOIN Dim_Location l ON f.LocationKey = l.LocationKey
+        GROUP BY l.Country, l.RegionType
+    )
+    SELECT 
+        Country, RegionType, TotalInvoices, TotalCustomers, TotalUnits, CountryRevenue,
+        ROUND(CountryRevenue * 100.0 / SUM(CountryRevenue) OVER (), 2) AS Revenue_Share_Pct,
+        RANK() OVER (ORDER BY CountryRevenue DESC) AS CountryRank
+    FROM CountrySales
+    ORDER BY CountryRevenue DESC
+    LIMIT 10;
+    """
+    df_q2 = pd.read_sql_query(q2, conn)
+    print(df_q2.to_string(index=False))
+
+    # -------------------------------------------------------------------------
+    # BÀI TOÁN 3: TOP 10 SẢN PHẨM CHỦ LỰC (BÁN CHẠY NHẤT & DOANH THU CAO NHẤT)
+    # -------------------------------------------------------------------------
+    print("\n\n[BÀI TOÁN 3A] TOP 10 SẢN PHẨM BÁN CHẠY NHẤT VỀ SỐ LƯỢNG (QUANTITY)")
+    print("-" * 80)
+    q3a = """
+    SELECT 
+        p.StockCode, SUBSTR(p.Description, 1, 35) AS Description,
+        SUM(f.Quantity) AS TotalQtySold,
+        ROUND(SUM(f.TotalRevenue), 2) AS TotalRevenue,
+        DENSE_RANK() OVER (ORDER BY SUM(f.Quantity) DESC) AS QtyRank
+    FROM Fact_Sales f
+    JOIN Dim_Product p ON f.ProductKey = p.ProductKey
+    GROUP BY p.StockCode, p.Description
+    ORDER BY TotalQtySold DESC
+    LIMIT 10;
+    """
+    df_q3a = pd.read_sql_query(q3a, conn)
+    print(df_q3a.to_string(index=False))
+
+    print("\n[BÀI TOÁN 3B] TOP 10 SẢN PHẨM DOANH THU CAO NHẤT (REVENUE)")
+    print("-" * 80)
+    q3b = """
+    SELECT 
+        p.StockCode, SUBSTR(p.Description, 1, 35) AS Description,
+        SUM(f.Quantity) AS TotalQtySold,
+        ROUND(SUM(f.TotalRevenue), 2) AS TotalRevenue,
+        ROUND(AVG(f.UnitPrice), 2) AS AvgPrice,
+        DENSE_RANK() OVER (ORDER BY SUM(f.TotalRevenue) DESC) AS RevRank
+    FROM Fact_Sales f
+    JOIN Dim_Product p ON f.ProductKey = p.ProductKey
+    GROUP BY p.StockCode, p.Description
+    ORDER BY TotalRevenue DESC
+    LIMIT 10;
+    """
+    df_q3b = pd.read_sql_query(q3b, conn)
+    print(df_q3b.to_string(index=False))
+
+    # -------------------------------------------------------------------------
+    # BÀI TOÁN 4: KHUNG GIỜ VÀNG MUA SẮM
+    # -------------------------------------------------------------------------
+    print("\n\n[BÀI TOÁN 4] PHÂN BỐ GIAO DỊCH THEO KHUNG GIỜ (PEAK SHOPPING HOURS)")
+    print("-" * 80)
+    q4 = """
+    SELECT 
+        f.Hour AS ShoppingHour,
+        COUNT(DISTINCT f.InvoiceNo) AS TotalOrders,
+        SUM(f.Quantity) AS TotalUnitsSold,
+        ROUND(SUM(f.TotalRevenue), 2) AS TotalRevenue,
+        ROUND(SUM(f.TotalRevenue) / COUNT(DISTINCT f.InvoiceNo), 2) AS AvgOrderValue,
+        ROUND(SUM(f.TotalRevenue) * 100.0 / SUM(SUM(f.TotalRevenue)) OVER (), 2) AS HourlySharePct
+    FROM Fact_Sales f
+    GROUP BY f.Hour
+    ORDER BY TotalOrders DESC;
+    """
+    df_q4 = pd.read_sql_query(q4, conn)
+    print(df_q4.to_string(index=False))
+
+    # -------------------------------------------------------------------------
+    # BÀI TOÁN 5: CHỈ SỐ KINH DOANH ĐƠN HÀNG (AOV & AVERAGE BASKET SIZE)
+    # -------------------------------------------------------------------------
+    print("\n\n[BÀI TOÁN 5] GIÁ TRỊ ĐƠN HÀNG TRUNG BÌNH (AOV) & BASKET SIZE THEO THÁNG")
+    print("-" * 80)
+    q5 = """
+    WITH OrderMetrics AS (
+        SELECT 
+            f.InvoiceNo, d.YearMonth,
+            SUM(f.Quantity) AS OrderUnits,
+            SUM(f.TotalRevenue) AS OrderValue
+        FROM Fact_Sales f
+        JOIN Dim_Date d ON f.DateKey = d.DateKey
+        GROUP BY f.InvoiceNo, d.YearMonth
+    )
+    SELECT 
+        YearMonth,
+        COUNT(InvoiceNo) AS TotalOrders,
+        ROUND(SUM(OrderValue), 2) AS TotalRevenue,
+        ROUND(AVG(OrderValue), 2) AS AOV_GBP,
+        ROUND(AVG(OrderUnits), 1) AS AvgBasketSize
+    FROM OrderMetrics
+    GROUP BY YearMonth
+    ORDER BY YearMonth;
+    """
+    df_q5 = pd.read_sql_query(q5, conn)
+    print(df_q5.to_string(index=False))
+
+    # -------------------------------------------------------------------------
+    # BÀI TOÁN 6: TỶ LỆ KHÁCH HÀNG QUAY LẠI (REPEAT CUSTOMER RATE)
+    # -------------------------------------------------------------------------
+    print("\n\n[BÀI TOÁN 6] TỶ LỆ KHÁCH HÀNG QUAY LẠI (REPEAT CUSTOMER RATE)")
+    print("-" * 80)
+    q6 = """
+    WITH CustomerOrders AS (
+        SELECT 
+            c.CustomerKey, c.CustomerID,
+            COUNT(DISTINCT f.InvoiceNo) AS OrderFrequency,
+            ROUND(SUM(f.TotalRevenue), 2) AS CustomerSpending
+        FROM Fact_Sales f
+        JOIN Dim_Customer c ON f.CustomerKey = c.CustomerKey
+        WHERE c.IsGuestCustomer = 0
+        GROUP BY c.CustomerKey, c.CustomerID
+    )
+    SELECT 
+        COUNT(CustomerKey) AS TotalIdentifiedCustomers,
+        SUM(CASE WHEN OrderFrequency = 1 THEN 1 ELSE 0 END) AS OneTimeBuyers,
+        SUM(CASE WHEN OrderFrequency > 1 THEN 1 ELSE 0 END) AS RepeatCustomers,
+        ROUND(SUM(CASE WHEN OrderFrequency > 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(CustomerKey), 2) AS RepeatCustomerRate_Pct,
+        ROUND(AVG(CustomerSpending), 2) AS AvgSpendPerCustomer
+    FROM CustomerOrders;
+    """
+    df_q6 = pd.read_sql_query(q6, conn)
+    print(df_q6.to_string(index=False))
+
+    # -------------------------------------------------------------------------
+    # BÀI TOÁN 7: TOP 10 KHÁCH HÀNG VIP
+    # -------------------------------------------------------------------------
+    print("\n\n[BÀI TOÁN 7] TOP 10 KHÁCH HÀNG VIP ĐÓNG GÓP DOANH THU CAO NHẤT")
+    print("-" * 80)
+    q7 = """
+    SELECT 
+        c.CustomerID, c.CustomerCode, c.Country,
+        COUNT(DISTINCT f.InvoiceNo) AS TotalOrders,
+        SUM(f.Quantity) AS TotalUnitsBought,
+        ROUND(SUM(f.TotalRevenue), 2) AS TotalSpent,
+        ROUND(SUM(f.TotalRevenue) / COUNT(DISTINCT f.InvoiceNo), 2) AS AvgOrderValue,
+        DENSE_RANK() OVER (ORDER BY SUM(f.TotalRevenue) DESC) AS SpendingRank
+    FROM Fact_Sales f
+    JOIN Dim_Customer c ON f.CustomerKey = c.CustomerKey
+    WHERE c.IsGuestCustomer = 0
+    GROUP BY c.CustomerID, c.CustomerCode, c.Country
+    ORDER BY TotalSpent DESC
+    LIMIT 10;
+    """
+    df_q7 = pd.read_sql_query(q7, conn)
+    print(df_q7.to_string(index=False))
+
+    # -------------------------------------------------------------------------
+    # BÀI TOÁN 8: PHÂN TÍCH ĐA TIỀN TỆ (MULTI-CURRENCY REVENUE - FRANKFURTER API / ECB)
+    # -------------------------------------------------------------------------
+    print("\n\n[BÀI TOÁN 8] DOANH THU QUY ĐỔI ĐA TIỀN TỆ (GBP / USD / EUR) THEO THÁNG")
+    print("-" * 80)
+    q8 = """
+    SELECT
+        d.YearMonth                                          AS YearMonth,
+        COUNT(DISTINCT f.InvoiceNo)                          AS Orders,
+        ROUND(SUM(f.TotalRevenue), 2)                        AS Revenue_GBP,
+        c.USD_Rate                                           AS FX_USD,
+        c.EUR_Rate                                           AS FX_EUR,
+        ROUND(SUM(f.TotalRevenue) * c.USD_Rate, 2)           AS Revenue_USD,
+        ROUND(SUM(f.TotalRevenue) * c.EUR_Rate, 2)           AS Revenue_EUR
+    FROM   Fact_Sales f
+    JOIN   Dim_Date d      ON f.DateKey    = d.DateKey
+    LEFT JOIN Dim_Currency c ON d.Year = c.Year AND d.Month = c.Month
+    GROUP  BY d.YearMonth, c.USD_Rate, c.EUR_Rate
+    ORDER  BY d.YearMonth;
+    """
+    df_q8 = pd.read_sql_query(q8, conn)
+    print(df_q8.to_string(index=False))
+
+    # -------------------------------------------------------------------------
+    # BÀI TOÁN 9: BIẾN ĐỘNG TỶ GIÁ THÁNG QUA THÁNG (MOM FX DELTA)
+    # -------------------------------------------------------------------------
+    print("\n\n[BÀI TOÁN 9] BIẾN ĐỘNG TỶ GIÁ THEO THÁNG (WINDOW FUNCTION LAG)")
+    print("-" * 80)
+    q9 = """
+    SELECT
+        YearMonth,
+        USD_Rate,
+        ROUND(USD_Rate - LAG(USD_Rate) OVER (ORDER BY Year, Month), 4) AS USD_MoM_Delta,
+        EUR_Rate,
+        ROUND(EUR_Rate - LAG(EUR_Rate) OVER (ORDER BY Year, Month), 4) AS EUR_MoM_Delta
+    FROM Dim_Currency
+    ORDER BY Year, Month;
+    """
+    df_q9 = pd.read_sql_query(q9, conn)
+    print(df_q9.to_string(index=False))
+
+    conn.close()
+    print("\n" + "=" * 80)
+    print("HOÀN TẤT THỰC THI TRUY VẤN OLAP!")
+    print("=" * 80)
+
+if __name__ == '__main__':
+    run_olap_analysis()
