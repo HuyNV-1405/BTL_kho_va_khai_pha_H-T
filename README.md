@@ -100,3 +100,79 @@ E:\ổ D\Kho\B\
    ```bash
    python -m streamlit run app.py
    ```
+
+---
+
+## 👥 HƯỚNG DẪN THÀNH VIÊN NHÓM CÀI ĐẶT VÀ CHẠY DỰ ÁN
+
+### 1. Chuẩn bị
+
+- Cài **Git** và **Python 3.10 trở lên**.
+- Nếu cần chạy MinIO, PostgreSQL và Superset, cài thêm **Docker Desktop** và khởi động Docker.
+- Clone repository về máy:
+
+  ```powershell
+  git clone https://github.com/fhgssg/BTL_kho_va_khai_pha_H-T.git
+  cd BTL_kho_va_khai_pha_H-T
+  ```
+
+### 2. Tạo môi trường Python và cài thư viện
+
+```powershell
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+```
+
+Nếu PowerShell không cho phép kích hoạt môi trường, mở Command Prompt và chạy:
+
+```bat
+.\.venv\Scripts\activate.bat
+```
+
+### 3. Cung cấp dữ liệu nguồn
+
+Các file dữ liệu CSV và database được loại khỏi Git để tránh đẩy các file lớn lên repository. Thành viên cần nhận file dữ liệu nguồn `data.csv` từ người quản lý dự án và đặt vào đúng vị trí:
+
+```text
+data\raw\data.csv
+```
+
+Nếu chưa có thư mục `data\raw`, hãy tạo thư mục đó trước khi chép file.
+
+### 4. Tạo dữ liệu sạch, kho dữ liệu và kết quả phân tích
+
+Chạy các lệnh từ thư mục gốc dự án, sau khi đã kích hoạt môi trường Python:
+
+```powershell
+python scripts\01_eda_and_cleaning.py
+python scripts\03_etl_pipeline.py
+python scripts\05_data_mining.py
+```
+
+Các script lần lượt tạo dữ liệu sạch, kho SQLite tại `database\retail_dwh.db`, và các kết quả khai phá tại thư mục `outputs`.
+
+### 5. Chạy Dashboard
+
+```powershell
+python -m streamlit run app.py
+```
+
+Mở địa chỉ được Streamlit in trong terminal, thường là `http://localhost:8501`. Để dừng Dashboard, nhấn `Ctrl+C` trong terminal đang chạy.
+
+### 6. (Tùy chọn) Chạy các dịch vụ Docker
+
+Phần MinIO, PostgreSQL và Superset là hạ tầng mở rộng; không bắt buộc nếu chỉ chạy Dashboard dựa trên SQLite.
+
+```powershell
+docker compose up -d
+python scripts\06_lakehouse_minio_postgres_etl.py
+```
+
+Để dừng các dịch vụ mà giữ dữ liệu trong Docker volumes:
+
+```powershell
+docker compose stop
+```
+
+Docker volumes nằm trên máy của từng thành viên và không được chia sẻ qua Git. Không chạy `docker compose down -v` nếu chưa sao lưu hoặc chưa chủ động muốn xóa dữ liệu volumes.
