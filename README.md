@@ -4,21 +4,28 @@ Dự án nghiên cứu, thiết kế và hiện thực hóa kiến trúc **Hồ 
 
 ---
 
-## 🌟 LUỒNG CHÍNH VÀ KIẾN TRÚC MỞ RỘNG (SYSTEM ARCHITECTURE)
+## 🌟 LUỒNG CHÍNH LAKEHOUSE (SYSTEM ARCHITECTURE)
 
 ```
-[ data/raw/data.csv ] -> [ EDA & Cleaning ] -> [ SQLite Star Schema DWH ]
-                                                   │
-                               ┌───────────────────┴──────────────────┐
-                               ▼                                      ▼
-                    [ OLAP & Data Mining ]                  [ Streamlit Dashboard ]
+[ data/raw/data.csv ] -> [ EDA & Cleaning ] -> [ MinIO Lakehouse ]
+                                                    raw
+                                                     ↓
+                                                  staging
+                                                     ↓
+                                                  curated
+                                                     ↓
+                                      [ PostgreSQL Star Schema DWH ]
+                                           ┌─────────┴─────────┐
+                                           ▼                   ▼
+                                     [ OLAP & Mining ]   [ Dashboards ]
 
-Luồng mở rộng tùy chọn: MinIO S3 -> PostgreSQL DWH -> Apache Superset
+SQLite là phương án local/dự phòng; không nằm trong luồng triển khai chính.
 ```
 
-SQLite (`database/retail_dwh.db`) là luồng mặc định được dùng bởi ETL, truy vấn OLAP,
-khai phá dữ liệu và dashboard. MinIO/PostgreSQL/Superset là hạ tầng mở rộng, chạy riêng
-qua Docker và không bắt buộc để demo luồng chính.
+MinIO là Lakehouse bắt buộc, nơi dữ liệu đi qua các lớp raw, staging (Parquet) và
+curated (Star Schema dạng Parquet). Pipeline chỉ nạp curated sang PostgreSQL sau khi
+các đối tượng đã được ghi và đọc lại từ MinIO. OLAP, RFM, Apriori và Streamlit dùng
+PostgreSQL làm nguồn chính. SQLite được giữ làm phương án local/dự phòng.
 
 ---
 
@@ -36,17 +43,17 @@ E:\ổ D\Kho\B\
 │   └── processed/              # Dữ liệu sạch và dữ liệu bị loại kèm lý do
 │
 ├── database/                   # Kho dữ liệu & Tài liệu thiết kế
-│   ├── retail_dwh.db           # Kho dữ liệu SQLite dùng trong luồng chính
+│   ├── retail_dwh.db           # Kho SQLite dự phòng/local
 │   ├── 02_schema_ddl.sql       # Kịch bản DDL Star Schema
 │   └── 02_data_modeling.md     # Tài liệu thiết kế mô hình đa chiều Kimball
 │
 ├── scripts/                    # Toàn bộ mã nguồn Python thực thi các giai đoạn
 │   ├── 01_eda_and_cleaning.py  # Giai đoạn 1: EDA & Làm sạch dữ liệu
-│   ├── 03_etl_pipeline.py      # Giai đoạn 3: ETL Pipeline nạp vào SQLite
+│   ├── 03_etl_pipeline.py      # ETL SQLite dự phòng/local
 │   ├── 04_run_olap_queries.py  # Giai đoạn 4: Thực thi 8 truy vấn phân tích OLAP
 │   ├── 05_data_mining.py       # Giai đoạn 5: RFM, K-Means & Market Basket
 │   ├── 03b_dwh_test_reconciliation.py # Kiểm thử và đối soát kho
-│   └── 06_lakehouse_minio_postgres_etl.py  # Data Lakehouse: MinIO S3 & PostgreSQL DWH
+│   └── 06_lakehouse_minio_postgres_etl.py  # ETL chính: MinIO Lakehouse -> PostgreSQL
 │
 ├── sql/                        # Kịch bản SQL phân tích
 │   ├── 02_schema_ddl.sql       # DDL tạo Schema
@@ -80,19 +87,25 @@ E:\ổ D\Kho\B\
 
 ## 🛠️ HƯỚNG DẪN KHỞI CHẠY HỆ THỐNG
 
-1. **Khởi động hạ tầng Docker**:
+1. **Khởi động hạ tầng Lakehouse**:
    ```bash
    docker compose up -d
    ```
-2. **Chạy đường ống nạp dữ liệu Lakehouse (MinIO S3 & PostgreSQL)**:
+2. **Làm sạch dữ liệu nguồn**:
    ```bash
-   python scripts/06_lakehouse_minio_postgres_etl.py
+   python scripts\01_eda_and_cleaning.py
    ```
-3. **Chạy mô hình khai phá dữ liệu RFM & Phân tích giỏ hàng**:
+3. **Chạy ETL chính qua MinIO rồi nạp curated vào PostgreSQL**:
    ```bash
-   python scripts/05_data_mining.py
+   python scripts\06_lakehouse_minio_postgres_etl.py
    ```
-4. **Mở Web Dashboard tương tác (Streamlit)**:
+4. **Kiểm thử DWH, sau đó chạy OLAP và khai phá**:
+   ```bash
+   python scripts\03b_dwh_test_reconciliation.py
+   python scripts\04_run_olap_queries.py
+   python scripts\05_data_mining.py
+   ```
+5. **Mở Web Dashboard tương tác (Streamlit)**:
    ```bash
    python -m streamlit run app.py
    ```
@@ -104,7 +117,7 @@ E:\ổ D\Kho\B\
 ### 1. Chuẩn bị
 
 - Cài **Git** và **Python 3.10 trở lên**.
-- Nếu cần chạy MinIO, PostgreSQL và Superset, cài thêm **Docker Desktop** và khởi động Docker.
+- Cài **Docker Desktop** và khởi động Docker để chạy MinIO và PostgreSQL (bắt buộc cho luồng chính). Superset là tùy chọn.
 - Clone repository về máy:
 
   ```powershell
@@ -136,17 +149,24 @@ data\raw\data.csv
 
 Nếu chưa có thư mục `data\raw`, hãy tạo thư mục đó trước khi chép file.
 
-### 4. Tạo dữ liệu sạch, kho dữ liệu và kết quả phân tích
+### 4. Tạo dữ liệu sạch, nạp Lakehouse/DWH và phân tích
 
 Chạy các lệnh từ thư mục gốc dự án, sau khi đã kích hoạt môi trường Python:
 
 ```powershell
 python scripts\01_eda_and_cleaning.py
-python scripts\03_etl_pipeline.py
+python scripts\07_api_enrichment.py
+docker compose up -d minio minio-init postgres
+python scripts\06_lakehouse_minio_postgres_etl.py
+python scripts\03b_dwh_test_reconciliation.py
+python scripts\04_run_olap_queries.py
 python scripts\05_data_mining.py
 ```
 
-Các script lần lượt tạo dữ liệu sạch, kho SQLite tại `database\retail_dwh.db`, và các kết quả khai phá tại thư mục `outputs`.
+Dữ liệu phải đi từ làm sạch qua MinIO raw/staging/curated rồi mới được nạp vào PostgreSQL.
+Script 07 là tùy chọn nếu cần bổ sung dữ liệu tỷ giá; khi chạy, nó chỉ lưu snapshot và CSV
+để script 06 ingest vào Lakehouse.
+Chỉ chạy kiểm thử, OLAP, khai phá và dashboard sau khi pipeline Lakehouse hoàn tất.
 
 ### 5. Chạy Dashboard
 
@@ -156,14 +176,18 @@ python -m streamlit run app.py
 
 Mở địa chỉ được Streamlit in trong terminal, thường là `http://localhost:8501`. Để dừng Dashboard, nhấn `Ctrl+C` trong terminal đang chạy.
 
-### 6. (Tùy chọn) Chạy các dịch vụ Docker
+### 6. Hạ tầng Lakehouse
 
-Phần MinIO, PostgreSQL và Superset là hạ tầng mở rộng; không bắt buộc nếu chỉ chạy Dashboard dựa trên SQLite.
+MinIO và PostgreSQL là thành phần bắt buộc của luồng chính; Superset là giao diện BI tùy chọn.
 
 ```powershell
 docker compose up -d
 python scripts\06_lakehouse_minio_postgres_etl.py
 ```
+
+SQLite được giữ làm phương án local/dự phòng. Để dùng SQLite cho các script phân tích,
+đặt `DWH_DATABASE_URL=sqlite:///database/retail_dwh.db` và nạp riêng bằng
+`python scripts\03_etl_pipeline.py`. Luồng SQLite bỏ qua Lakehouse nên không thay thế ETL chính.
 
 Để dừng các dịch vụ mà giữ dữ liệu trong Docker volumes:
 

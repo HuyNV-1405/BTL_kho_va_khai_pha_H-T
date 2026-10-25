@@ -13,18 +13,25 @@ Mô tả: Bộ kiểm thử và đối soát toàn diện Kho Dữ Liệu (DWH A
 
 import os
 import sys
-import sqlite3
 import pandas as pd
 import numpy as np
+from sqlalchemy import text
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DB_PATH = os.path.join(BASE_DIR, "database", "retail_dwh.db")
+sys.path.insert(0, BASE_DIR)
+from dwh_connection import get_engine
+
 CLEAN_CSV = os.path.join(BASE_DIR, "data", "processed", "data_cleaned.csv")
 REPORT_PATH = os.path.join(BASE_DIR, "outputs", "dwh_test_reconciliation_report.csv")
 
+class _QueryAdapter:
+    def __init__(self, connection):
+        self.connection = connection
+
+    def execute(self, query):
+        return self.connection.execute(text(query))
+
 def run_dwh_test_suite(db_path=None, clean_csv=None, output_report=None, verbose=True):
-    if db_path is None:
-        db_path = DB_PATH
     if clean_csv is None:
         clean_csv = CLEAN_CSV
     if output_report is None:
@@ -34,21 +41,22 @@ def run_dwh_test_suite(db_path=None, clean_csv=None, output_report=None, verbose
     print(" HỆ THỐNG KIỂM THỬ VÀ ĐỐI SOÁT TỰ ĐỘNG KHO DỮ LIỆU (DWH TEST & RECONCILIATION SUITE)")
     print("=" * 95)
 
-    if not os.path.exists(db_path):
-        raise FileNotFoundError(f"Không tìm thấy database kho dữ liệu tại: '{db_path}'")
     if not os.path.exists(clean_csv):
         raise FileNotFoundError(f"Không tìm thấy file dữ liệu sạch tại: '{clean_csv}'")
 
-    print(f"-> Cơ sở dữ liệu: '{db_path}'")
+    database_url = None
+    if db_path:
+        database_url = db_path if "://" in db_path else f"sqlite:///{os.path.abspath(db_path).replace(os.sep, '/')}"
+    engine = get_engine(database_url)
+    print(f"-> Cơ sở dữ liệu: '{engine.url.get_backend_name()}'")
     print(f"-> File nguồn sạch: '{clean_csv}'")
 
     # Đọc dữ liệu nguồn sạch để đối chiếu
     df_clean = pd.read_csv(clean_csv, dtype={'InvoiceNo': str, 'StockCode': str}, low_memory=False)
     df_clean['InvoiceDate'] = pd.to_datetime(df_clean['InvoiceDate'])
     
-    # Kết nối SQLite
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
+    conn = engine.connect()
+    cursor = _QueryAdapter(conn)
 
     tests_results = []
     test_counter = 1
@@ -317,7 +325,7 @@ def run_dwh_test_suite(db_path=None, clean_csv=None, output_report=None, verbose
     dup_saleskey_count = cursor.execute("""
         SELECT COUNT(*) FROM (
             SELECT SalesKey FROM Fact_Sales GROUP BY SalesKey HAVING COUNT(*) > 1
-        )
+        ) AS duplicate_sales_keys
     """).fetchone()[0]
     record_test(
         f"TC{test_counter:02d}", "Uniqueness", "Tính đơn nhất của khóa chính SalesKey trong Fact_Sales",
@@ -328,10 +336,10 @@ def run_dwh_test_suite(db_path=None, clean_csv=None, output_report=None, verbose
 
     # 6.2 Tính đơn nhất của Natural Keys trong các Dimensions
     dim_dup_queries = [
-        ("Dim_Customer", "CustomerID", "SELECT COUNT(*) FROM (SELECT CustomerID FROM Dim_Customer GROUP BY CustomerID HAVING COUNT(*) > 1)"),
-        ("Dim_Product", "StockCode", "SELECT COUNT(*) FROM (SELECT StockCode FROM Dim_Product GROUP BY StockCode HAVING COUNT(*) > 1)"),
-        ("Dim_Location", "Country", "SELECT COUNT(*) FROM (SELECT Country FROM Dim_Location GROUP BY Country HAVING COUNT(*) > 1)"),
-        ("Dim_Date", "DateKey", "SELECT COUNT(*) FROM (SELECT DateKey FROM Dim_Date GROUP BY DateKey HAVING COUNT(*) > 1)")
+        ("Dim_Customer", "CustomerID", "SELECT COUNT(*) FROM (SELECT CustomerID FROM Dim_Customer GROUP BY CustomerID HAVING COUNT(*) > 1) AS duplicate_customer_keys"),
+        ("Dim_Product", "StockCode", "SELECT COUNT(*) FROM (SELECT StockCode FROM Dim_Product GROUP BY StockCode HAVING COUNT(*) > 1) AS duplicate_product_keys"),
+        ("Dim_Location", "Country", "SELECT COUNT(*) FROM (SELECT Country FROM Dim_Location GROUP BY Country HAVING COUNT(*) > 1) AS duplicate_location_keys"),
+        ("Dim_Date", "DateKey", "SELECT COUNT(*) FROM (SELECT DateKey FROM Dim_Date GROUP BY DateKey HAVING COUNT(*) > 1) AS duplicate_date_keys")
     ]
 
     for tbl, nat_key, q in dim_dup_queries:

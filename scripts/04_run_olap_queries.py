@@ -1,18 +1,19 @@
 """
 File: 04_run_olap_queries.py
-Mô tả: Tự động thực thi các truy vấn OLAP & Phân tích Nâng cao từ Kho Dữ Liệu retail_dwh.db
+Mô tả: Thực thi truy vấn OLAP trên PostgreSQL DWH (SQLite có thể chọn qua DWH_DATABASE_URL).
 """
 
 import os
-import sqlite3
+import sys
 import pandas as pd
+from sqlalchemy import text
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, BASE_DIR)
+from dwh_connection import get_engine
 
-def run_olap_analysis(db_file=None):
-    if db_file is None:
-        db_file = os.path.join(BASE_DIR, "database", "retail_dwh.db")
-    conn = sqlite3.connect(db_file)
+def run_olap_analysis(database_url=None):
+    engine = get_engine(database_url)
     pd.set_option('display.max_columns', 15)
     pd.set_option('display.width', 1000)
     
@@ -45,7 +46,8 @@ def run_olap_analysis(db_file=None):
     FROM MonthlySales
     ORDER BY Year, Month;
     """
-    df_q1 = pd.read_sql_query(q1, conn)
+    with engine.connect() as conn:
+        df_q1 = pd.read_sql_query(text(q1), conn)
     print(df_q1.to_string(index=False))
 
     # -------------------------------------------------------------------------
@@ -73,7 +75,8 @@ def run_olap_analysis(db_file=None):
     ORDER BY CountryRevenue DESC
     LIMIT 10;
     """
-    df_q2 = pd.read_sql_query(q2, conn)
+    with engine.connect() as conn:
+        df_q2 = pd.read_sql_query(text(q2), conn)
     print(df_q2.to_string(index=False))
 
     # -------------------------------------------------------------------------
@@ -93,7 +96,8 @@ def run_olap_analysis(db_file=None):
     ORDER BY TotalQtySold DESC
     LIMIT 10;
     """
-    df_q3a = pd.read_sql_query(q3a, conn)
+    with engine.connect() as conn:
+        df_q3a = pd.read_sql_query(text(q3a), conn)
     print(df_q3a.to_string(index=False))
 
     print("\n[BÀI TOÁN 3B] TOP 10 SẢN PHẨM DOANH THU CAO NHẤT (REVENUE)")
@@ -111,7 +115,8 @@ def run_olap_analysis(db_file=None):
     ORDER BY TotalRevenue DESC
     LIMIT 10;
     """
-    df_q3b = pd.read_sql_query(q3b, conn)
+    with engine.connect() as conn:
+        df_q3b = pd.read_sql_query(text(q3b), conn)
     print(df_q3b.to_string(index=False))
 
     # -------------------------------------------------------------------------
@@ -131,7 +136,8 @@ def run_olap_analysis(db_file=None):
     GROUP BY f.Hour
     ORDER BY TotalOrders DESC;
     """
-    df_q4 = pd.read_sql_query(q4, conn)
+    with engine.connect() as conn:
+        df_q4 = pd.read_sql_query(text(q4), conn)
     print(df_q4.to_string(index=False))
 
     # -------------------------------------------------------------------------
@@ -159,7 +165,8 @@ def run_olap_analysis(db_file=None):
     GROUP BY YearMonth
     ORDER BY YearMonth;
     """
-    df_q5 = pd.read_sql_query(q5, conn)
+    with engine.connect() as conn:
+        df_q5 = pd.read_sql_query(text(q5), conn)
     print(df_q5.to_string(index=False))
 
     # -------------------------------------------------------------------------
@@ -186,7 +193,8 @@ def run_olap_analysis(db_file=None):
         ROUND(AVG(CustomerSpending), 2) AS AvgSpendPerCustomer
     FROM CustomerOrders;
     """
-    df_q6 = pd.read_sql_query(q6, conn)
+    with engine.connect() as conn:
+        df_q6 = pd.read_sql_query(text(q6), conn)
     print(df_q6.to_string(index=False))
 
     # -------------------------------------------------------------------------
@@ -209,7 +217,8 @@ def run_olap_analysis(db_file=None):
     ORDER BY TotalSpent DESC
     LIMIT 10;
     """
-    df_q7 = pd.read_sql_query(q7, conn)
+    with engine.connect() as conn:
+        df_q7 = pd.read_sql_query(text(q7), conn)
     print(df_q7.to_string(index=False))
 
     # -------------------------------------------------------------------------
@@ -232,7 +241,8 @@ def run_olap_analysis(db_file=None):
     GROUP  BY d.YearMonth, c.USD_Rate, c.EUR_Rate
     ORDER  BY d.YearMonth;
     """
-    df_q8 = pd.read_sql_query(q8, conn)
+    with engine.connect() as conn:
+        df_q8 = pd.read_sql_query(text(q8), conn)
     print(df_q8.to_string(index=False))
 
     # -------------------------------------------------------------------------
@@ -250,10 +260,11 @@ def run_olap_analysis(db_file=None):
     FROM Dim_Currency
     ORDER BY Year, Month;
     """
-    df_q9 = pd.read_sql_query(q9, conn)
+    with engine.connect() as conn:
+        df_q9 = pd.read_sql_query(text(q9), conn)
     print(df_q9.to_string(index=False))
 
-    conn.close()
+
     print("\n" + "=" * 80)
     print("HOÀN TẤT THỰC THI TRUY VẤN OLAP!")
     print("=" * 80)

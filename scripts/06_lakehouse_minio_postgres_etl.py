@@ -1,19 +1,16 @@
 """
 File: 06_lakehouse_minio_postgres_etl.py
-Mô tả: [MỞ RỘNG NÂNG CAO] Đường ống Data Lakehouse theo kiến trúc hiện đại:
+Mô tả: Đường ống Lakehouse chính theo kiến trúc hiện đại:
        1. Đẩy dữ liệu lên MinIO (S3 Lakehouse: raw/ -> staging/ -> curated/).
        2. Dùng DuckDB đọc/ghi định dạng Parquet nén tối ưu.
        3. Nạp toàn bộ Star Schema vào PostgreSQL Data Warehouse (dwh:5432).
 
-       ⚠️  GHI CHÚ QUAN TRỌNG:
-       Đây là luồng MỞ RỘNG minh họa kiến trúc Data Lakehouse hiện đại.
-       LUỒNG KHO CHÍNH THỨC sử dụng SQLite, nằm tại: scripts/03_etl_pipeline.py
-       Mọi kết quả phân tích OLAP, RFM, Market Basket đều dựa trên kho SQLite chính.
-       Luồng Lakehouse này được phát triển để mở rộng kỹ năng và demo khả năng
-       triển khai trên hạ tầng phân tán (MinIO Object Storage + PostgreSQL RDBMS).
+       MinIO raw -> staging -> curated -> PostgreSQL DWH.
+       OLAP, khai phá dữ liệu và dashboard sử dụng PostgreSQL làm nguồn chính.
 """
 
 import os
+import tempfile
 import time
 import s3fs
 import duckdb
@@ -30,12 +27,20 @@ CFG = {
     "s3_secret": "minioadmin123",
     "pg_dwh": "postgresql+psycopg2://dataeng:dataeng123@localhost:5432/dwh"
 }
+CFG["pg_dwh"] = os.getenv("DWH_DATABASE_URL") or (
+    "postgresql+psycopg2://{user}:{password}@{host}:{port}/{database}".format(
+        user=os.getenv("PGUSER", "dataeng"),
+        password=os.getenv("PGPASSWORD", "dataeng123"),
+        host=os.getenv("PGHOST", "localhost"),
+        port=os.getenv("PGPORT", "5432"),
+        database=os.getenv("PGDATABASE", "dwh")
+    )
+)
 
 def run_lakehouse_pipeline():
     start_time = time.time()
     print("=" * 75)
-    print("⚠️  [MỞ RỘNG] ĐƯỜNG ỐNG DATA LAKEHOUSE: MINIO S3 -> DUCKDB -> POSTGRESQL")
-    print("    Luồng kho CHÍNH THỨC: scripts/03_etl_pipeline.py (SQLite Star Schema)")
+    print("ĐƯỜNG ỐNG CHÍNH: MINIO RAW -> STAGING -> CURATED -> POSTGRESQL DWH")
     print("=" * 75)
 
     # --------------------------------------------------------------------------
@@ -64,27 +69,39 @@ def run_lakehouse_pipeline():
     # 2.1 Tầng Raw: Upload file csv gốc
     raw_s3_path = "raw/online_retail/data.csv"
     print(f"  -> Đang đẩy file gốc lên MinIO '{raw_s3_path}'...")
-    if os.path.exists(DATA_RAW_CSV):
-        fs.put(DATA_RAW_CSV, raw_s3_path)
-        print(f"     ✅ Hoàn tất upload Raw Data ({os.path.getsize(DATA_RAW_CSV)/(1024*1024):.2f} MB)")
-    else:
-        print(f"     ⚠️ Không tìm thấy {DATA_RAW_CSV}")
+    if not os.path.exists(DATA_RAW_CSV):
+        raise FileNotFoundError(f"Không tìm thấy dữ liệu raw: {DATA_RAW_CSV}")
+    fs.put(DATA_RAW_CSV, raw_s3_path)
+    print(f"     ✅ Hoàn tất upload Raw Data ({os.path.getsize(DATA_RAW_CSV)/(1024*1024):.2f} MB)")
 
     # 2.2 Tầng Staging: Chuyển dữ liệu sạch sang định dạng Parquet tối ưu nén
     staging_s3_path = "staging/online_retail/data_cleaned.parquet"
     print(f"  -> Đang chuyển đổi sang Parquet và đẩy lên MinIO '{staging_s3_path}'...")
-    if os.path.exists(DATA_CLEAN_CSV):
-        df_clean = pd.read_csv(DATA_CLEAN_CSV, dtype={'InvoiceNo': str}, low_memory=False)
-        with fs.open(staging_s3_path, 'wb') as f:
-            df_clean.to_parquet(f, index=False, engine='pyarrow', compression='snappy')
-        print(f"     ✅ Đã lưu Staging Parquet ({len(df_clean):,} dòng, siêu nén tối ưu)")
-    else:
-        raise FileNotFoundError(f"Không tìm thấy: {DATA_CLEAN_CSV}")
+    if not os.path.exists(DATA_CLEAN_CSV):
+        raise FileNotFoundError(f"Không tìm thấy dữ liệu đã làm sạch: {DATA_CLEAN_CSV}")
+    df_clean = pd.read_csv(DATA_CLEAN_CSV, dtype={'InvoiceNo': str}, low_memory=False)
+    with fs.open(staging_s3_path, 'wb') as f:
+        df_clean.to_parquet(f, index=False, engine='pyarrow', compression='snappy')
+    print(f"     ✅ Đã lưu Staging Parquet ({len(df_clean):,} dòng, siêu nén tối ưu)")
 
     # 2.3 Tầng Curated: Dùng DuckDB đọc từ Staging Parquet và trích xuất các bảng Star Schema
     print("  -> Đang dùng DuckDB tạo các bảng Dimensional Model sang tầng 'curated/'...")
     
-    # Đọc từ file parquet cục bộ hoặc df_clean để phân rã Dimensional Model
+    # Đọc lại Parquet từ Lakehouse trước khi chuyển đổi sang mô hình chiều.
+    staging_tmp = tempfile.NamedTemporaryFile(suffix=".parquet", delete=False)
+    staging_tmp.close()
+    try:
+        fs.get(staging_s3_path, staging_tmp.name)
+        duck = duckdb.connect()
+        try:
+            df_clean = duck.execute(
+                "SELECT * FROM read_parquet(?)", [staging_tmp.name]
+            ).df()
+        finally:
+            duck.close()
+    finally:
+        os.unlink(staging_tmp.name)
+
     # Dim_Date
     min_date = pd.to_datetime(df_clean['InvoiceDate']).min().normalize()
     max_date = pd.to_datetime(df_clean['InvoiceDate']).max().normalize()
@@ -156,19 +173,43 @@ def run_lakehouse_pipeline():
     fact_sales['UnitPrice'] = df_clean['UnitPrice'].round(2)
     fact_sales['TotalRevenue'] = (fact_sales['Quantity'] * fact_sales['UnitPrice']).round(2)
 
+    currency_csv = os.path.join(BASE_DIR, "outputs", "exchange_rates.csv")
+    currency_columns = [
+        "CurrencyKey", "Year", "Month", "YearMonth", "RateDate",
+        "GBP_Base", "USD_Rate", "EUR_Rate", "API_Source", "Is_Fallback", "Extracted_At"
+    ]
+    if os.path.exists(currency_csv):
+        df_currency = pd.read_csv(currency_csv)
+        df_currency.columns = df_currency.columns.str.lower()
+        raw_currency = os.path.join(BASE_DIR, "data", "raw", "exchange_rates_raw.json")
+        if os.path.exists(raw_currency):
+            fs.put(raw_currency, "raw/online_retail/exchange_rates_raw.json")
+        with fs.open("staging/online_retail/exchange_rates.parquet", "wb") as f:
+            df_currency.to_parquet(f, index=False, engine="pyarrow", compression="snappy")
+    else:
+        df_currency = pd.DataFrame(columns=[column.lower() for column in currency_columns])
+
     # Đẩy các bảng Curated Parquet lên MinIO
     curated_tables = {
         "dim_date.parquet": dim_date,
         "dim_location.parquet": dim_location,
         "dim_customer.parquet": dim_customer,
         "dim_product.parquet": dim_product,
-        "fact_sales.parquet": fact_sales
+        "fact_sales.parquet": fact_sales,
+        "dim_currency.parquet": df_currency
     }
     for fname, tdf in curated_tables.items():
+        tdf.columns = tdf.columns.str.lower()
         cur_path = f"curated/online_retail/{fname}"
         with fs.open(cur_path, 'wb') as f:
             tdf.to_parquet(f, index=False, engine='pyarrow')
         print(f"     ✅ MinIO curated: '{cur_path}' ({len(tdf):,} rows)")
+
+    curated_from_lake = {}
+    for fname in curated_tables:
+        with fs.open(f"curated/online_retail/{fname}", "rb") as curated_file:
+            curated_from_lake[fname.removesuffix(".parquet")] = pd.read_parquet(curated_file)
+    curated_tables = curated_from_lake
 
     # --------------------------------------------------------------------------
     # BƯỚC 3: KHỞI TẠO STAR SCHEMA TRÊN POSTGRESQL DATA WAREHOUSE
@@ -177,13 +218,7 @@ def run_lakehouse_pipeline():
     engine = create_engine(CFG["pg_dwh"])
     
     pg_ddl = """
-    DROP TABLE IF EXISTS fact_sales CASCADE;
-    DROP TABLE IF EXISTS dim_product CASCADE;
-    DROP TABLE IF EXISTS dim_customer CASCADE;
-    DROP TABLE IF EXISTS dim_location CASCADE;
-    DROP TABLE IF EXISTS dim_date CASCADE;
-
-    CREATE TABLE dim_date (
+    CREATE TABLE IF NOT EXISTS dim_date (
         DateKey         INTEGER PRIMARY KEY,
         FullDate        DATE NOT NULL,
         Day             INTEGER NOT NULL,
@@ -198,13 +233,13 @@ def run_lakehouse_pipeline():
         YearMonth       VARCHAR(7) NOT NULL
     );
 
-    CREATE TABLE dim_location (
+    CREATE TABLE IF NOT EXISTS dim_location (
         LocationKey     INTEGER PRIMARY KEY,
         Country         VARCHAR(100) NOT NULL UNIQUE,
         RegionType      VARCHAR(50) NOT NULL
     );
 
-    CREATE TABLE dim_customer (
+    CREATE TABLE IF NOT EXISTS dim_customer (
         CustomerKey     INTEGER PRIMARY KEY,
         CustomerID      INTEGER NOT NULL UNIQUE,
         CustomerCode    VARCHAR(50) NOT NULL,
@@ -212,14 +247,28 @@ def run_lakehouse_pipeline():
         Country         VARCHAR(100)
     );
 
-    CREATE TABLE dim_product (
+    CREATE TABLE IF NOT EXISTS dim_product (
         ProductKey          INTEGER PRIMARY KEY,
         StockCode           VARCHAR(50) NOT NULL UNIQUE,
         Description         VARCHAR(255) NOT NULL,
         UnitPrice_Standard  DECIMAL(10, 2) DEFAULT 0.00
     );
 
-    CREATE TABLE fact_sales (
+    CREATE TABLE IF NOT EXISTS dim_currency (
+        currencykey INTEGER PRIMARY KEY,
+        year INTEGER NOT NULL,
+        month INTEGER NOT NULL,
+        yearmonth VARCHAR(7) NOT NULL,
+        ratedate DATE NOT NULL,
+        gbp_base DECIMAL(5, 2) NOT NULL DEFAULT 1.00,
+        usd_rate DECIMAL(10, 6),
+        eur_rate DECIMAL(10, 6),
+        api_source VARCHAR(100) NOT NULL,
+        is_fallback INTEGER NOT NULL DEFAULT 0,
+        extracted_at VARCHAR(30)
+    );
+
+    CREATE TABLE IF NOT EXISTS fact_sales (
         SalesKey            INTEGER PRIMARY KEY,
         InvoiceNo           VARCHAR(20) NOT NULL,
         InvoiceTimestamp    TIMESTAMP NOT NULL,
@@ -233,38 +282,41 @@ def run_lakehouse_pipeline():
         TotalRevenue        DECIMAL(12, 2) NOT NULL
     );
 
-    CREATE INDEX idx_pg_fact_date ON fact_sales(DateKey);
-    CREATE INDEX idx_pg_fact_customer ON fact_sales(CustomerKey);
-    CREATE INDEX idx_pg_fact_product ON fact_sales(ProductKey);
-    CREATE INDEX idx_pg_fact_location ON fact_sales(LocationKey);
-    CREATE INDEX idx_pg_fact_invoiceno ON fact_sales(InvoiceNo);
+    CREATE INDEX IF NOT EXISTS idx_pg_fact_date ON fact_sales(DateKey);
+    CREATE INDEX IF NOT EXISTS idx_pg_fact_customer ON fact_sales(CustomerKey);
+    CREATE INDEX IF NOT EXISTS idx_pg_fact_product ON fact_sales(ProductKey);
+    CREATE INDEX IF NOT EXISTS idx_pg_fact_location ON fact_sales(LocationKey);
+    CREATE INDEX IF NOT EXISTS idx_pg_fact_invoiceno ON fact_sales(InvoiceNo);
     """
     
-    with engine.connect() as con:
-        con.execute(text(pg_ddl))
-        con.commit()
-    print("  -> Đã khởi tạo hoàn tất cấu trúc DDL & Foreign Keys trên PostgreSQL DWH!")
-
     # --------------------------------------------------------------------------
     # BƯỚC 4: NẠP DỮ LIỆU VÀO POSTGRESQL & KIỂM THỬ TOÀN VẸN
     # --------------------------------------------------------------------------
     print("\n[BƯỚC 4/4] NẠP DỮ LIỆU VÀO POSTGRESQL & ĐỐI CHIẾU DOANH SỐ...")
     
     load_start = time.time()
-    # Chuyển tên cột sang chữ thường để tương thích chuẩn PostgreSQL
-    dim_date.columns = dim_date.columns.str.lower()
-    dim_location.columns = dim_location.columns.str.lower()
-    dim_customer.columns = dim_customer.columns.str.lower()
-    dim_product.columns = dim_product.columns.str.lower()
-    fact_sales.columns = fact_sales.columns.str.lower()
+    dim_date = curated_tables["dim_date"]
+    dim_location = curated_tables["dim_location"]
+    dim_customer = curated_tables["dim_customer"]
+    dim_product = curated_tables["dim_product"]
+    fact_sales = curated_tables["fact_sales"]
 
-    dim_date.to_sql('dim_date', engine, if_exists='append', index=False, method='multi', chunksize=1000)
-    dim_location.to_sql('dim_location', engine, if_exists='append', index=False, method='multi')
-    dim_customer.to_sql('dim_customer', engine, if_exists='append', index=False, method='multi', chunksize=1000)
-    dim_product.to_sql('dim_product', engine, if_exists='append', index=False, method='multi', chunksize=1000)
+    with engine.begin() as con:
+        con.execute(text(pg_ddl))
+        con.execute(text(
+            "TRUNCATE TABLE fact_sales, dim_currency, dim_product, dim_customer, dim_location, dim_date"
+        ))
+        dim_date.to_sql('dim_date', con, if_exists='append', index=False, method='multi', chunksize=1000)
+        dim_location.to_sql('dim_location', con, if_exists='append', index=False, method='multi')
+        dim_customer.to_sql('dim_customer', con, if_exists='append', index=False, method='multi', chunksize=1000)
+        dim_product.to_sql('dim_product', con, if_exists='append', index=False, method='multi', chunksize=1000)
+        curated_tables["dim_currency"].to_sql(
+            'dim_currency', con, if_exists='append', index=False, method='multi'
+        )
     
-    print("  -> Đang nạp fact_sales (530,104 dòng) vào PostgreSQL...")
-    fact_sales.to_sql('fact_sales', engine, if_exists='append', index=False, chunksize=20000)
+        print(f"  -> Đang nạp fact_sales ({len(fact_sales):,} dòng) vào PostgreSQL...")
+        fact_sales.to_sql('fact_sales', con, if_exists='append', index=False, chunksize=20000)
+    print("  -> Đã khởi tạo schema và nạp dữ liệu curated vào PostgreSQL DWH.")
     load_duration = time.time() - load_start
     print(f"     ✅ Nạp thành công vào PostgreSQL trong {load_duration:.2f} giây!")
 
@@ -273,15 +325,15 @@ def run_lakehouse_pipeline():
         print("\n" + "-" * 55)
         print(f"{'Bảng PostgreSQL':<25} | {'Số bản ghi':>20}")
         print("-" * 55)
-        for tbl in ['dim_date', 'dim_location', 'dim_customer', 'dim_product', 'fact_sales']:
+        for tbl in ['dim_date', 'dim_location', 'dim_customer', 'dim_product', 'dim_currency', 'fact_sales']:
             cnt = con.execute(text(f"SELECT COUNT(*) FROM {tbl}")).fetchone()[0]
             print(f"{tbl:<25} | {cnt:>20,}")
 
         # Đối chiếu doanh số
-        pg_rev = con.execute(text("SELECT SUM(TotalRevenue) FROM fact_sales")).fetchone()[0]
-        source_rev = (df_clean['Quantity'] * df_clean['UnitPrice']).sum()
+        pg_rev = con.execute(text("SELECT SUM(totalrevenue) FROM fact_sales")).fetchone()[0]
+        source_rev = float(curated_tables["fact_sales"]["totalrevenue"].sum())
         print("-" * 55)
-        print(f"Tổng doanh thu nguồn (CSV):       £{source_rev:,.2f}")
+        print(f"Tổng doanh thu curated (MinIO):   £{source_rev:,.2f}")
         print(f"Tổng doanh thu trên Postgres DWH: £{pg_rev:,.2f}")
         print(f"Đối chiếu: {'✅ KHỚP HOÀN TOÀN 100%' if abs(float(source_rev) - float(pg_rev)) < 1.0 else '❌ SAI LỆCH'}")
         print("-" * 55)

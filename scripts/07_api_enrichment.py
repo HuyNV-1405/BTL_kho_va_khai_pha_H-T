@@ -2,8 +2,10 @@
 Script 07: API Enrichment – Currency Exchange Rate (Frankfurter API / ECB)
 ==========================================================================
 GIAI ĐOẠN 1  – EDA: Kiểm tra & chuẩn hóa dữ liệu tỷ giá từ API
-GIAI ĐOẠN 3  – ETL: Nạp vào bảng Dim_Currency trong retail_dwh.db
-GIAI ĐOẠN 4  – OLAP: Chạy các truy vấn phân tích đa tiền tệ
+GIAI ĐOẠN 2  – Xuất snapshot raw và CSV staging cho Lakehouse pipeline
+
+scripts/06_lakehouse_minio_postgres_etl.py đưa tỷ giá vào MinIO và PostgreSQL.
+Truy vấn phân tích tỷ giá chạy sau đó qua scripts/04_run_olap_queries.py.
 
 Nguồn API: https://api.frankfurter.app (ECB reference rates – miễn phí, không cần key)
 """
@@ -12,7 +14,6 @@ import json
 from datetime import datetime
 import requests
 import pandas as pd
-import sqlite3
 
 # ─── CẤU HÌNH ────────────────────────────────────────────────────────────────
 BASE_URL        = "https://api.frankfurter.app"
@@ -20,7 +21,6 @@ BASE_CURRENCY   = "GBP"
 TARGET_CURR     = "USD,EUR"
 
 BASE_DIR        = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DB_PATH         = os.path.join(BASE_DIR, "database", "retail_dwh.db")
 RAW_DIR         = os.path.join(BASE_DIR, "data", "raw")
 RAW_SNAPSHOT    = os.path.join(RAW_DIR, "exchange_rates_raw.json")
 OUTPUT_CSV      = os.path.join(BASE_DIR, "outputs", "exchange_rates.csv")
@@ -121,132 +121,15 @@ def fetch_and_validate() -> pd.DataFrame:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# GIAI ĐOẠN 3: ETL – Nạp vào Dim_Currency trong DWH
+# GIAI ĐOẠN 2: LƯU ĐẦU RA ĐỂ LAKEHOUSE PIPELINE INGEST
 # ─────────────────────────────────────────────────────────────────────────────
-def etl_load_to_dwh(df: pd.DataFrame):
+def save_exchange_rates(df: pd.DataFrame):
     print("\n" + "="*60)
-    print("  GĐ 3 – ETL: Nạp dữ liệu vào Dim_Currency (retail_dwh.db)")
+    print("  GĐ 2 – Lưu dữ liệu tỷ giá để Lakehouse ingest")
     print("="*60)
-
-    if not os.path.exists(DB_PATH):
-        print(f"⚠️  Không tìm thấy DWH tại: {DB_PATH}")
-        print("   → Lưu CSV thay thế.")
-        df.to_csv(OUTPUT_CSV, index=False)
-        print(f"💾 Đã lưu → {OUTPUT_CSV}")
-        return
-
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-
-    # Tạo bảng với các trường metadata xuất xứ
-    cursor.executescript("""
-        DROP TABLE IF EXISTS Dim_Currency;
-        CREATE TABLE Dim_Currency (
-            CurrencyKey   INTEGER PRIMARY KEY,
-            Year          INTEGER NOT NULL,
-            Month         INTEGER NOT NULL,
-            YearMonth     VARCHAR(7) NOT NULL,
-            RateDate      DATE NOT NULL,
-            GBP_Base      DECIMAL(5,2) NOT NULL DEFAULT 1.00,
-            USD_Rate      DECIMAL(10,6),
-            EUR_Rate      DECIMAL(10,6),
-            API_Source    VARCHAR(100) NOT NULL,
-            Is_Fallback   INTEGER NOT NULL DEFAULT 0,
-            Extracted_At  VARCHAR(30),
-            UNIQUE(Year, Month)
-        );
-        CREATE INDEX IF NOT EXISTS idx_currency_yearmonth ON Dim_Currency(YearMonth);
-        CREATE INDEX IF NOT EXISTS idx_currency_year_month ON Dim_Currency(Year, Month);
-    """)
-
-    # Upsert – chèn hoặc cập nhật
-    cursor.execute("DELETE FROM Dim_Currency")
-    cols = ["CurrencyKey", "Year", "Month", "YearMonth", "RateDate", "GBP_Base", "USD_Rate", "EUR_Rate", "API_Source", "Is_Fallback", "Extracted_At"]
-    rows = df[cols].copy()
-    rows["RateDate"] = rows["RateDate"].astype(str)
-    rows.to_sql("Dim_Currency", conn, if_exists="append", index=False)
-    conn.commit()
-
-    count = cursor.execute("SELECT COUNT(*) FROM Dim_Currency").fetchone()[0]
-    print(f"✅ Đã nạp {count} bản ghi vào Dim_Currency.")
-
-    # Lưu CSV song song
     df.to_csv(OUTPUT_CSV, index=False)
-    print(f"💾 Đồng thời lưu CSV → {OUTPUT_CSV}")
-    conn.close()
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# GIAI ĐOẠN 4: OLAP – Truy vấn phân tích đa tiền tệ
-# ─────────────────────────────────────────────────────────────────────────────
-def olap_analysis():
-    print("\n" + "="*60)
-    print("  GĐ 4 – OLAP: Phân tích doanh thu đa tiền tệ (SQL trên DWH)")
-    print("="*60)
-
-    if not os.path.exists(DB_PATH):
-        print(f"⚠️  DWH chưa tồn tại tại: {DB_PATH}. Bỏ qua OLAP.")
-        return
-
-    conn = sqlite3.connect(DB_PATH)
-
-    # ── Truy vấn 1: Doanh thu từng tháng quy đổi sang USD & EUR ─────────────
-    q1 = """
-    SELECT
-        d.YearMonth                                        AS Thang,
-        ROUND(SUM(f.TotalRevenue), 2)                      AS DoanhThu_GBP,
-        c.USD_Rate                                         AS TyGia_USD,
-        c.EUR_Rate                                         AS TyGia_EUR,
-        ROUND(SUM(f.TotalRevenue) * c.USD_Rate, 2)         AS DoanhThu_USD,
-        ROUND(SUM(f.TotalRevenue) * c.EUR_Rate, 2)         AS DoanhThu_EUR
-    FROM   Fact_Sales f
-    JOIN   Dim_Date d     ON f.DateKey = d.DateKey
-    LEFT JOIN Dim_Currency c ON d.Year = c.Year AND d.Month = c.Month
-    GROUP  BY d.YearMonth, c.USD_Rate, c.EUR_Rate
-    ORDER  BY d.YearMonth
-    """
-    df_q1 = pd.read_sql_query(q1, conn)
-    print("\n📊 Truy vấn 1 – Doanh thu hàng tháng (GBP / USD / EUR):")
-    print(df_q1.to_string(index=False))
-
-    # ── Truy vấn 2: Tổng doanh thu cả năm theo từng tiền tệ ─────────────────
-    q2 = """
-    SELECT
-        d.Year                                             AS Nam,
-        ROUND(SUM(f.TotalRevenue), 2)                      AS TongDT_GBP,
-        ROUND(AVG(c.USD_Rate), 4)                          AS TyGia_USD_TrungBinh,
-        ROUND(SUM(f.TotalRevenue) * AVG(c.USD_Rate), 2)    AS TongDT_USD,
-        ROUND(AVG(c.EUR_Rate), 4)                          AS TyGia_EUR_TrungBinh,
-        ROUND(SUM(f.TotalRevenue) * AVG(c.EUR_Rate), 2)    AS TongDT_EUR
-    FROM   Fact_Sales f
-    JOIN   Dim_Date d     ON f.DateKey = d.DateKey
-    LEFT JOIN Dim_Currency c ON d.Year = c.Year AND d.Month = c.Month
-    GROUP  BY d.Year
-    ORDER  BY d.Year
-    """
-    df_q2 = pd.read_sql_query(q2, conn)
-    print("\n📊 Truy vấn 2 – Tổng doanh thu theo năm quy đổi đa tiền tệ:")
-    print(df_q2.to_string(index=False))
-
-    # ── Truy vấn 3: Tháng biến động tỷ giá mạnh nhất ────────────────────────
-    q3 = """
-    SELECT
-        YearMonth,
-        USD_Rate,
-        LAG(USD_Rate) OVER (ORDER BY Year, Month)                       AS USD_Rate_ThangTruoc,
-        ROUND(USD_Rate - LAG(USD_Rate) OVER (ORDER BY Year, Month), 6)  AS USD_Delta,
-        EUR_Rate,
-        LAG(EUR_Rate) OVER (ORDER BY Year, Month)                       AS EUR_Rate_ThangTruoc,
-        ROUND(EUR_Rate - LAG(EUR_Rate) OVER (ORDER BY Year, Month), 6)  AS EUR_Delta
-    FROM Dim_Currency
-    ORDER BY Year, Month
-    """
-    df_q3 = pd.read_sql_query(q3, conn)
-    print("\n📊 Truy vấn 3 – Biến động tỷ giá tháng qua tháng (MoM Delta):")
-    print(df_q3.to_string(index=False))
-
-    conn.close()
-    print("\n✅ Hoàn tất OLAP – Phân tích đa tiền tệ.")
+    print(f"💾 Đã lưu {len(df)} bản ghi tỷ giá → {OUTPUT_CSV}")
+    print("   → Script 06 sẽ nạp CSV qua MinIO staging/curated vào PostgreSQL.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -255,13 +138,12 @@ def olap_analysis():
 if __name__ == "__main__":
     print("\n" + "★"*60)
     print("  SCRIPT 07 – API ENRICHMENT (Frankfurter / ECB)")
-    print("  Thực hiện đầy đủ 3 giai đoạn: EDA → ETL → OLAP")
+    print("  Trích xuất và kiểm tra tỷ giá; bước Lakehouse ETL chạy ở script 06")
     print("★"*60)
 
     df_rates = fetch_and_validate()       # GĐ 1
-    etl_load_to_dwh(df_rates)            # GĐ 3
-    olap_analysis()                       # GĐ 4
+    save_exchange_rates(df_rates)
 
     print("\n" + "★"*60)
-    print("  ✅ Tất cả 3 giai đoạn hoàn tất thành công!")
+    print("  ✅ Tỷ giá sẵn sàng để ingest qua Lakehouse pipeline.")
     print("★"*60)

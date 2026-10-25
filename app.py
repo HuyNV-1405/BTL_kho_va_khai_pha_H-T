@@ -6,13 +6,14 @@ Khởi chạy: streamlit run app.py
 """
 
 import os
-import sqlite3
 import pandas as pd
 import numpy as np
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 import requests
+from sqlalchemy import text
+from dwh_connection import get_engine
 
 # ------------------------------------------------------------------------------
 # 1. CẤU HÌNH TRANG VÀ THIẾT KẾ GIAO DIỆN (STREAMLIT PAGE CONFIG & THEME)
@@ -98,28 +99,30 @@ st.markdown("""
 # 2. ĐƯỜNG DẪN DỮ LIỆU & TẢI DỮ LIỆU (CACHED DATA LOADERS)
 # ------------------------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "database", "retail_dwh.db")
 RFM_PATH = os.path.join(BASE_DIR, "outputs", "rfm_customer_segments.csv")
 RULES_PATH = os.path.join(BASE_DIR, "outputs", "market_basket_rules.csv")
 
 def _sales_filter_clause(region_type=None, customer_ids=None):
     clauses = []
-    params = []
+    params = {}
     if region_type:
-        clauses.append("l.RegionType = ?")
-        params.append(region_type)
+        clauses.append("l.regiontype = :region_type")
+        params["region_type"] = region_type
     if customer_ids is not None:
         if not customer_ids:
             clauses.append("1 = 0")
         else:
-            placeholders = ", ".join("?" for _ in customer_ids)
+            placeholders = ", ".join(f":customer_id_{index}" for index in range(len(customer_ids)))
             clauses.append(f"c.CustomerID IN ({placeholders})")
-            params.extend(customer_ids)
+            params.update({
+                f"customer_id_{index}": customer_id
+                for index, customer_id in enumerate(customer_ids)
+            })
     return (" AND " + " AND ".join(clauses) if clauses else ""), params
 
 @st.cache_data(ttl=3600)
-def load_kpi_and_monthly(db_path, region_type=None, customer_ids=None):
-    conn = sqlite3.connect(db_path)
+def load_kpi_and_monthly(region_type=None, customer_ids=None):
+    conn = get_engine().connect()
     filter_sql, params = _sales_filter_clause(region_type, customer_ids)
     q_monthly = """
     SELECT 
@@ -139,7 +142,12 @@ def load_kpi_and_monthly(db_path, region_type=None, customer_ids=None):
     GROUP BY d.YearMonth, d.Year, d.Month
     ORDER BY d.Year, d.Month
     """
-    df_monthly = pd.read_sql_query(q_monthly, conn, params=params)
+    df_monthly = pd.read_sql_query(text(q_monthly), conn, params=params)
+    df_monthly = df_monthly.rename(columns={
+        "yearmonth": "YearMonth", "year": "Year", "month": "Month",
+        "totalorders": "TotalOrders", "totalunitssold": "TotalUnitsSold",
+        "monthlyrevenue": "MonthlyRevenue", "aov": "AOV"
+    })
     
     # Tính MoM Growth %
     df_monthly['PrevRevenue'] = df_monthly['MonthlyRevenue'].shift(1)
@@ -151,8 +159,8 @@ def load_kpi_and_monthly(db_path, region_type=None, customer_ids=None):
     return df_monthly
 
 @st.cache_data(ttl=3600)
-def load_country_data(db_path, region_type=None, customer_ids=None):
-    conn = sqlite3.connect(db_path)
+def load_country_data(region_type=None, customer_ids=None):
+    conn = get_engine().connect()
     filter_sql, params = _sales_filter_clause(region_type, customer_ids)
     q = """
     SELECT 
@@ -170,13 +178,17 @@ def load_country_data(db_path, region_type=None, customer_ids=None):
     GROUP BY l.Country, l.RegionType
     ORDER BY Revenue DESC
     """
-    df = pd.read_sql_query(q, conn, params=params)
+    df = pd.read_sql_query(text(q), conn, params=params)
+    df = df.rename(columns={
+        "country": "Country", "regiontype": "RegionType", "orders": "Orders",
+        "customers": "Customers", "unitssold": "UnitsSold", "revenue": "Revenue"
+    })
     conn.close()
     return df
 
 @st.cache_data(ttl=3600)
-def load_product_data(db_path, region_type=None, customer_ids=None):
-    conn = sqlite3.connect(db_path)
+def load_product_data(region_type=None, customer_ids=None):
+    conn = get_engine().connect()
     filter_sql, params = _sales_filter_clause(region_type, customer_ids)
     q = """
     SELECT 
@@ -193,13 +205,17 @@ def load_product_data(db_path, region_type=None, customer_ids=None):
     """ + filter_sql + """
     GROUP BY p.StockCode, p.Description
     """
-    df = pd.read_sql_query(q, conn, params=params)
+    df = pd.read_sql_query(text(q), conn, params=params)
+    df = df.rename(columns={
+        "stockcode": "StockCode", "description": "Description",
+        "totalqty": "TotalQty", "totalrevenue": "TotalRevenue", "avgprice": "AvgPrice"
+    })
     conn.close()
     return df
 
 @st.cache_data(ttl=3600)
-def load_hourly_data(db_path, region_type=None, customer_ids=None):
-    conn = sqlite3.connect(db_path)
+def load_hourly_data(region_type=None, customer_ids=None):
+    conn = get_engine().connect()
     filter_sql, params = _sales_filter_clause(region_type, customer_ids)
     q = """
     SELECT 
@@ -215,25 +231,27 @@ def load_hourly_data(db_path, region_type=None, customer_ids=None):
     GROUP BY f.Hour
     ORDER BY f.Hour
     """
-    df = pd.read_sql_query(q, conn, params=params)
+    df = pd.read_sql_query(text(q), conn, params=params)
+    df = df.rename(columns={
+        "hour": "Hour", "orders": "Orders", "units": "Units", "revenue": "Revenue"
+    })
     conn.close()
     return df
 
 @st.cache_data(ttl=3600)
-def load_customer_ids_for_region(db_path, region_type):
-    conn = sqlite3.connect(db_path)
-    df = pd.read_sql_query(
-        """
-        SELECT DISTINCT c.CustomerID
+def load_customer_ids_for_region(region_type):
+    with get_engine().connect() as conn:
+        df = pd.read_sql_query(
+            text("""
+        SELECT DISTINCT c.CustomerID AS "CustomerID"
         FROM Fact_Sales f
         JOIN Dim_Customer c ON f.CustomerKey = c.CustomerKey
         JOIN Dim_Location l ON f.LocationKey = l.LocationKey
-        WHERE l.RegionType = ? AND c.CustomerID != -1
-        """,
-        conn,
-        params=(region_type,)
-    )
-    conn.close()
+        WHERE l.RegionType = :region_type AND c.CustomerID != -1
+        """),
+            conn,
+            params={"region_type": region_type}
+        )
     return set(df["CustomerID"].astype(int))
 
 @st.cache_data(ttl=3600)
@@ -249,19 +267,24 @@ def load_basket_rules(rules_path):
     return pd.DataFrame()
 
 @st.cache_data(ttl=3600)
-def load_dwh_row_counts(db_path):
-    conn = sqlite3.connect(db_path)
-    counts = {
-        table: pd.read_sql_query(f"SELECT COUNT(*) AS row_count FROM {table}", conn).iloc[0, 0]
-        for table in ("Fact_Sales", "Dim_Product", "Dim_Customer")
-    }
-    conn.close()
+def load_dwh_row_counts():
+    with get_engine().connect() as conn:
+        counts = {
+            table: pd.read_sql_query(
+                text(f"SELECT COUNT(*) AS row_count FROM {table_name}"), conn
+            ).iloc[0, 0]
+            for table, table_name in (
+                ("Fact_Sales", "fact_sales"),
+                ("Dim_Product", "dim_product"),
+                ("Dim_Customer", "dim_customer")
+            )
+        }
     return counts
 
 # Tải dữ liệu nguồn
 df_rfm = load_rfm_data(RFM_PATH)
 df_rules = load_basket_rules(RULES_PATH)
-dwh_row_counts = load_dwh_row_counts(DB_PATH)
+dwh_row_counts = load_dwh_row_counts()
 
 # ------------------------------------------------------------------------------
 # 3. SIDEBAR - BỘ LỌC VÀ THÔNG TIN DỰ ÁN
@@ -290,8 +313,9 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("#### 📊 **Thông Tin Kho Dữ Liệu**")
     st.markdown(f"""
-    - **Kho đang dùng**: SQLite (`database/retail_dwh.db`)
-    - **Hạ tầng mở rộng**: MinIO / PostgreSQL / Superset (Docker)
+    - **Kho đang dùng**: PostgreSQL (bảng curated từ MinIO Lakehouse)
+    - **Lakehouse**: MinIO raw → staging → curated (Parquet)
+    - **SQLite**: Phương án local/dự phòng
     - **Mô hình**: Star Schema chuẩn Kimball
     - **Fact**: {dwh_row_counts['Fact_Sales']:,} dòng
     - **Sản phẩm**: {dwh_row_counts['Dim_Product']:,} SKU | **Khách hàng**: {dwh_row_counts['Dim_Customer']:,}
@@ -312,16 +336,16 @@ if selected_segment != "Tất cả":
         for customer_id in df_rfm.loc[df_rfm["Segment"] == selected_segment, "CustomerID"].dropna()
     ))
 
-df_monthly = load_kpi_and_monthly(DB_PATH, region_type, segment_customer_ids)
-df_country = load_country_data(DB_PATH, region_type, segment_customer_ids)
-df_products = load_product_data(DB_PATH, region_type, segment_customer_ids)
-df_hourly = load_hourly_data(DB_PATH, region_type, segment_customer_ids)
+df_monthly = load_kpi_and_monthly(region_type, segment_customer_ids)
+df_country = load_country_data(region_type, segment_customer_ids)
+df_products = load_product_data(region_type, segment_customer_ids)
+df_hourly = load_hourly_data(region_type, segment_customer_ids)
 
 df_rfm_analysis = df_rfm.copy()
 if selected_segment != "Tất cả":
     df_rfm_analysis = df_rfm_analysis[df_rfm_analysis["Segment"] == selected_segment]
 if region_type:
-    regional_customer_ids = load_customer_ids_for_region(DB_PATH, region_type)
+    regional_customer_ids = load_customer_ids_for_region(region_type)
     df_rfm_analysis = df_rfm_analysis[
         df_rfm_analysis["CustomerID"].astype(int).isin(regional_customer_ids)
     ]
@@ -737,14 +761,16 @@ with tab5:
         
     with col_dwh2:
         st.markdown("#### ⚡ Thống Kê Bảng Kho Dữ Liệu")
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        tables = ['Dim_Date', 'Dim_Location', 'Dim_Customer', 'Dim_Product', 'Fact_Sales']
+        tables = [
+            ('dim_date', 'Dim_Date'), ('dim_location', 'Dim_Location'),
+            ('dim_customer', 'Dim_Customer'), ('dim_product', 'Dim_Product'),
+            ('fact_sales', 'Fact_Sales')
+        ]
         stats = []
-        for t in tables:
-            cnt = c.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
-            stats.append({'Bảng (Table)': t, 'Số Bản Ghi (Rows)': f"{cnt:,}"})
-        conn.close()
+        with get_engine().connect() as conn:
+            for table_name, label in tables:
+                cnt = conn.execute(text(f"SELECT COUNT(*) FROM {table_name}")).fetchone()[0]
+                stats.append({'Bảng (Table)': label, 'Số Bản Ghi (Rows)': f"{cnt:,}"})
         st.table(pd.DataFrame(stats))
 
     st.markdown("---")
@@ -909,4 +935,4 @@ with tab6:
 
 # Footer
 st.markdown("---")
-st.markdown("<div style='text-align: center; color: #94A3B8; font-size: 0.9rem;'>Đồ Án Kho Dữ Liệu & Phân Tích Bán Lẻ (Online Retail DWH) • Xây dựng bằng Python, SQLite & Streamlit</div>", unsafe_allow_html=True)
+st.markdown("<div style='text-align: center; color: #94A3B8; font-size: 0.9rem;'>Đồ Án Kho Dữ Liệu & Phân Tích Bán Lẻ (Online Retail DWH) • MinIO Lakehouse, PostgreSQL & Streamlit</div>", unsafe_allow_html=True)

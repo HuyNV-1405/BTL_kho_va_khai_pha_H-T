@@ -5,9 +5,10 @@
 ## TỔNG QUAN KẾ HOẠCH
 - **Mục tiêu**: Hoàn thành toàn diện đồ án từ dữ liệu thô `data.csv` đến Kho dữ liệu hoàn chỉnh, phân tích nâng cao và Dashboard trực quan.
 - **Thời lượng khuyến nghị**: 2 - 4 tuần (hoặc rút gọn trong 5 - 7 ngày tùy tiến độ bài tập).
-- **Công nghệ đề xuất**:
+- **Công nghệ sử dụng**:
   - Ngôn ngữ: `Python 3.11` (Pandas, Numpy, Scikit-learn, Mlxtend, SqlAlchemy).
-  - Kho lưu trữ: `DuckDB` hoặc `SQLite` (nhẹ, nhanh, không cần cài server phức tạp) hoặc `PostgreSQL` / `SQL Server`.
+  - Lakehouse chính: `MinIO` (S3) với các lớp raw/staging/curated, dữ liệu Parquet được xử lý bằng `DuckDB`.
+  - Kho phục vụ phân tích: `PostgreSQL`; `SQLite` giữ làm phương án local/dự phòng.
   - Trực quan hóa: `Streamlit` (Dashboard web tương tác trực tiếp bằng Python) hoặc `Power BI`.
 
 ---
@@ -61,23 +62,21 @@
 
 ---
 
-### GIAI ĐOẠN 3: XÂY DỰNG ĐƯỜNG ỐNG ETL (ETL PIPELINE)
-**Mục tiêu**: Chuyển đổi dữ liệu sạch từ bảng phẳng sang các bảng Fact và Dimension trong cơ sở dữ liệu.
+### GIAI ĐOẠN 3: LAKEHOUSE VÀ ĐƯỜNG ỐNG ETL
+**Mục tiêu**: Đưa dữ liệu qua MinIO raw → staging → curated rồi nạp Star Schema curated vào PostgreSQL trước mọi phân tích tiếp theo.
 
-- [x] **Bước 3.1**: Khởi tạo Database kho (`retail_dwh.db`).
-- [x] **Bước 3.2**: Thực thi DDL tạo các bảng Dimensions và Fact.
-- [x] **Bước 3.3**: Lập trình ETL trích xuất và biến đổi:
-  - Tạo Dimension Date từ dải ngày tháng tối thiểu đến tối đa trong dữ liệu.
-  - Tạo Dimension Location, Customer và Product với Surrogate Key tự tăng.
-  - Nối (Join) các khóa đại diện vào bảng Fact.
-- [x] **Bước 3.4**: Thực hiện nạp dữ liệu (Batch Load) và kiểm thử tính toàn vẹn (Data Integrity & Reconciliation Checks).
+- [x] **Bước 3.1**: Đưa CSV nguồn lên bucket `raw` của MinIO.
+- [x] **Bước 3.2**: Đưa dữ liệu đã làm sạch thành Parquet vào bucket `staging`.
+- [x] **Bước 3.3**: Dùng DuckDB đọc lại staging, tạo Parquet Star Schema và lưu vào `curated`.
+- [x] **Bước 3.4**: Nạp các bảng curated đọc lại từ MinIO vào PostgreSQL theo transaction, sau đó đối soát số dòng và doanh thu.
+- [x] **Phương án dự phòng**: Giữ `03_etl_pipeline.py` để nạp riêng vào SQLite khi chạy local; không dùng thay cho luồng Lakehouse chính.
 
-*Thời gian dự kiến*: 2 - 3 ngày | *Đầu ra*: Script tự động hóa `03_etl_pipeline.py` & Kho dữ liệu `retail_dwh.db`.
+*Thời gian dự kiến*: 2 - 3 ngày | *Đầu ra*: `scripts/06_lakehouse_minio_postgres_etl.py`, các lớp Parquet trên MinIO và PostgreSQL DWH.
 
 ---
 
 ### GIAI ĐOẠN 4: TRUY VẤN PHÂN TÍCH ĐA CHIỀU (OLAP & ADVANCED SQL)
-**Mục tiêu**: Viết các câu lệnh SQL giải quyết các câu hỏi kinh doanh cốt lõi.
+**Mục tiêu**: Sau khi Lakehouse ETL hoàn tất, truy vấn PostgreSQL DWH để giải quyết các câu hỏi kinh doanh cốt lõi.
 
 - [x] **Bước 4.1**: Viết câu truy vấn tổng hợp theo các chiều:
   - Báo cáo doanh thu theo Tháng/Quý/Năm (Thời gian).
@@ -113,7 +112,7 @@
 **Mục tiêu**: Đóng gói kết quả thành sản phẩm hoàn chỉnh để trình bày và bảo vệ đồ án.
 
 - [x] **Bước 6.1**: Xây dựng Dashboard tương tác:
-  - Sử dụng **Streamlit** kết hợp Plotly (`app.py`), giao diện hiện đại tích hợp trực tiếp dữ liệu từ `retail_dwh.db` và các tệp mô hình `outputs/`.
+  - Sử dụng **Streamlit** kết hợp Plotly (`app.py`), lấy dữ liệu từ PostgreSQL DWH và các tệp kết quả khai phá `outputs/`.
 - [x] **Bước 6.2**: Thiết kế các trang hiển thị chính:
   - Tab 1: Tổng quan kinh doanh & Chỉ số tài chính (KPIs, xu hướng MoM, khung giờ vàng).
   - Tab 2: Phân tích địa lý & Top sản phẩm sinh lời.
@@ -133,8 +132,8 @@
 |---|---|---|:---:|
 | **Giai đoạn 1** | EDA & Tiền xử lý dữ liệu | `scripts/01_eda_and_cleaning.py` | ✅ Hoàn thành |
 | **Giai đoạn 2** | Thiết kế Star Schema & DDL | `database/02_schema_ddl.sql`, `02_data_modeling.md` | ✅ Hoàn thành |
-| **Giai đoạn 3** | Xây dựng pipeline ETL | `scripts/03_etl_pipeline.py`, `database/retail_dwh.db` | ✅ Hoàn thành |
+| **Giai đoạn 3** | Lakehouse ETL: MinIO → PostgreSQL | `scripts/06_lakehouse_minio_postgres_etl.py`, `raw/staging/curated`, PostgreSQL DWH | ✅ Hoàn thành |
 | **Giai đoạn 4** | Truy vấn OLAP & Phân tích SQL | `sql/04_olap_queries.sql`, `scripts/04_run_olap_queries.py` | ✅ Hoàn thành |
 | **Giai đoạn 5** | RFM Segmentation & Market Basket | `scripts/05_data_mining.py`, `outputs/` | ✅ Hoàn thành |
 | **Giai đoạn 6** | Dashboard Web & Báo cáo hoàn chỉnh | `app.py` (6 tabs), `BAO_CAO_DO_AN.md` | ✅ Hoàn thành (100%) |
-| **Mở rộng** | **API Enrichment – Frankfurter (ECB)** | `scripts/07_api_enrichment.py`, `outputs/exchange_rates.csv`, `Dim_Currency` trong DWH | ✅ **Đầy đủ (EDA + ETL + OLAP + Dashboard)** |
+| **Tích hợp dữ liệu bổ sung** | **API Enrichment – Frankfurter (ECB)** | `scripts/07_api_enrichment.py`, `outputs/exchange_rates.csv`, `curated/dim_currency.parquet`, PostgreSQL `dim_currency` | ✅ **Đầy đủ (EDA + ETL + OLAP + Dashboard)** |

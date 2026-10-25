@@ -6,16 +6,19 @@ Mô tả: Giai đoạn 5 - Khai phá dữ liệu chuyên sâu (Data Mining & Mac
 """
 
 import os
-import sqlite3
+import sys
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 from mlxtend.frequent_patterns import apriori, association_rules
+from sqlalchemy import text
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DB_PATH = os.path.join(BASE_DIR, "database", "retail_dwh.db")
+sys.path.insert(0, BASE_DIR)
+from dwh_connection import get_engine
+
 OUTPUTS_DIR = os.path.join(BASE_DIR, "outputs")
 
 # ==============================================================================
@@ -39,7 +42,11 @@ def rfm_segmentation_and_clustering(conn, output_csv):
     JOIN Dim_Customer c ON f.CustomerKey = c.CustomerKey
     WHERE c.IsGuestCustomer = 0
     """
-    df_sales = pd.read_sql_query(query, conn)
+    df_sales = pd.read_sql_query(text(query), conn)
+    df_sales.columns = [
+        "CustomerID", "CustomerCode", "Country", "InvoiceNo",
+        "InvoiceTimestamp", "TotalRevenue"
+    ]
     df_sales['InvoiceTimestamp'] = pd.to_datetime(df_sales['InvoiceTimestamp'])
 
     # 2. Xác định ngày mốc tham chiếu (Snapshot Date = Ngày max + 1)
@@ -274,7 +281,8 @@ def market_basket_analysis(conn, output_csv, min_support=0.015, min_lift=1.2):
     WHERE p.Description NOT IN ({})
     """.format(", ".join(f"'{x}'" for x in exclude_items))
 
-    df_items = pd.read_sql_query(query, conn)
+    df_items = pd.read_sql_query(text(query), conn)
+    df_items.columns = ["InvoiceNo", "Description"]
     print(f"- Số dòng mặt hàng phân tích: {len(df_items):,}")
     
     # Lọc các đơn hàng có từ 2 sản phẩm trở lên
@@ -334,15 +342,12 @@ def market_basket_analysis(conn, output_csv, min_support=0.015, min_lift=1.2):
 # ==============================================================================
 def run_data_mining():
     os.makedirs(OUTPUTS_DIR, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-
     rfm_output = os.path.join(OUTPUTS_DIR, "rfm_customer_segments.csv")
     basket_output = os.path.join(OUTPUTS_DIR, "market_basket_rules.csv")
-
-    rfm_df = rfm_segmentation_and_clustering(conn, rfm_output)
-    rules_df = market_basket_analysis(conn, basket_output, min_support=0.015, min_lift=1.2)
-
-    conn.close()
+    engine = get_engine()
+    with engine.connect() as conn:
+        rfm_segmentation_and_clustering(conn, rfm_output)
+        market_basket_analysis(conn, basket_output, min_support=0.015, min_lift=1.2)
     print("\n" + "=" * 70)
     print("HOÀN THÀNH TOÀN BỘ GIAI ĐOẠN 5: KHAI PHÁ DỮ LIỆU & MACHINE LEARNING!")
     print("=" * 70)

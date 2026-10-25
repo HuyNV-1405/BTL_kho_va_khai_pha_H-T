@@ -80,9 +80,15 @@ flowchart TD
         CR["scripts/07_api_enrichment.py<br/>(Chuẩn hóa tỷ giá cuối tháng)"]
     end
 
-    subgraph DWHLAYER ["4. DATA WAREHOUSE LAYER (KHO DỮ LIỆU STAR SCHEMA)"]
-        ETL["scripts/03_etl_pipeline.py<br/>(Surrogate Keys Map & Batch Load)"]
-        subgraph DWH ["retail_dwh.db (SQLite DWH chính; PostgreSQL là luồng mở rộng)"]
+    subgraph LAKEHOUSE ["4. LAKEHOUSE LAYER (MINIO RAW → STAGING → CURATED)"]
+        LAKE_RAW["raw/online_retail/data.csv"]
+        LAKE_STAGING["staging/online_retail/data_cleaned.parquet"]
+        LAKE_CURATED["curated/online_retail/*.parquet<br/>(Star Schema + Currency)"]
+        LAKE_RAW --> LAKE_STAGING --> LAKE_CURATED
+    end
+    subgraph DWHLAYER ["5. DATA WAREHOUSE LAYER (KHO DỮ LIỆU STAR SCHEMA)"]
+        ETL["scripts/06_lakehouse_minio_postgres_etl.py<br/>(DuckDB transform, batch load)"]
+        subgraph DWH ["PostgreSQL DWH chính"]
             DD["Dim_Date (374 ngày)"]
             DC["Dim_Customer (4,339 khách)"]
             DP["Dim_Product (3,921 SKU)"]
@@ -92,13 +98,13 @@ flowchart TD
         end
     end
 
-    subgraph ANALYTICS ["5. ANALYTICS & DATA MINING (PHÂN TÍCH & KHAI PHÁ)"]
+    subgraph ANALYTICS ["6. ANALYTICS & DATA MINING (PHÂN TÍCH & KHAI PHÁ)"]
         OLAP["scripts/04_run_olap_queries.py<br/>• Doanh thu Thời gian / MoM<br/>• Cơ cấu thị trường UK/Global<br/>• Top sản phẩm & Repeat Rate<br/>• Quy đổi đa tiền tệ"]
         MINING["scripts/05_data_mining.py<br/>• RFM Scoring (8 phân khúc)<br/>• K-Means Clustering (k=2)<br/>• Apriori MBA (992 luật bán kèm)"]
         OUT["outputs/<br/>• rfm_customer_segments.csv<br/>• market_basket_rules.csv<br/>• exchange_rates.csv"]
     end
 
-    subgraph PRESENTATION ["6. PRESENTATION & BI DASHBOARD (TRỰC QUAN HÓA)"]
+    subgraph PRESENTATION ["7. PRESENTATION & BI DASHBOARD (TRỰC QUAN HÓA)"]
         ST["Streamlit BI Dashboard (app.py)<br/>• Tab 1: Xu Hướng & MoM<br/>• Tab 2: Địa Lý & Top SKU<br/>• Tab 3: Khách Hàng RFM & K-Means<br/>• Tab 4: Gợi Ý Bán Chéo (Recommender)<br/>• Tab 5: Kiến Trúc Star Schema<br/>• Tab 6: Quy Đổi Tỷ Giá Đa Tiền Tệ"]
         SUP["Apache Superset (Docker BI)"]
     end
@@ -107,7 +113,8 @@ flowchart TD
     S2 --> R2
     R1 --> CL --> CLEAN_CSV
     R2 --> CR
-    CLEAN_CSV --> ETL
+    CLEAN_CSV --> LAKE_RAW
+    LAKE_CURATED --> ETL
     CR --> ETL
     ETL --> DD & DC & DP & DL & DCUR & FS
     FS --> OLAP
@@ -162,18 +169,20 @@ Tài liệu thiết kế: `database/02_data_modeling.md` | DDL Schema: `database
 
 ---
 
-## 4. GIAI ĐOẠN 3: XÂY DỰNG ĐƯỜNG ỐNG ETL (ETL PIPELINE)
+## 4. GIAI ĐOẠN 3: LAKEHOUSE VÀ ĐƯỜNG ỐNG ETL
 
-Script thực hiện: `scripts/03_etl_pipeline.py`.
+Script thực hiện: `scripts/06_lakehouse_minio_postgres_etl.py`.
 
-### 4.1. Quy trình ETL
-- **Extract**: Đọc dữ liệu sạch từ `data_cleaned.csv`.
-- **Transform**: Tự động sinh khóa đại diện tự tăng (Surrogate Keys), map từ điển dữ liệu (Dictionary Lookups) với tốc độ xử lý trong bộ nhớ RAM cao.
-- **Load**: Nạp theo lô (Batch Load 50,000 dòng/batch) vào cơ sở dữ liệu `database/retail_dwh.db`.
+### 4.1. Quy trình Lakehouse ETL
+- **Raw**: Đưa CSV nguồn và snapshot API lên bucket `raw` của MinIO.
+- **Staging**: Chuyển dữ liệu sạch thành Parquet, lưu tại `staging`.
+- **Curated**: Dùng DuckDB đọc lại Parquet staging, tạo các bảng Star Schema dạng Parquet và lưu tại `curated`.
+- **Load**: Đọc lại các object curated từ MinIO rồi nạp theo lô, trong một transaction, vào PostgreSQL DWH.
+- **SQLite**: Giữ `scripts/03_etl_pipeline.py` làm luồng local/dự phòng; không phải nguồn dữ liệu cho các bước chính.
 
 ### 4.2. Kiểm thử tính toàn vẹn (Integrity & Reconciliation)
 - **Ràng buộc khóa ngoại**: **0 lỗi mồ côi** (100% dòng Fact khớp hoàn hảo với 4 bảng Dim).
-- **Kiểm thử và đối soát**: Bộ kiểm thử tự động gồm 25 phép kiểm tra; hiện tại **25/25 đạt**, bao gồm đối chiếu số dòng, tổng số lượng, doanh thu, khóa ngoại, quy tắc nghiệp vụ và một số lát cắt.
+- **Kiểm thử và đối soát PostgreSQL**: Bộ kiểm thử tự động gồm 25 phép kiểm tra; hiện tại **25/25 đạt**, bao gồm đối chiếu số dòng, tổng số lượng, doanh thu, khóa ngoại, quy tắc nghiệp vụ và một số lát cắt.
   - Doanh thu dữ liệu sạch: **£10,642,110.80**.
   - Doanh thu `Fact_Sales`: **£10,642,110.80** (sai lệch **£0.00** ở độ chính xác 2 chữ số thập phân).
 
