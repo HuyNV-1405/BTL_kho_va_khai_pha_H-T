@@ -118,15 +118,93 @@ def rfm_segmentation_and_clustering(conn, output_csv):
     scaler = StandardScaler()
     rfm_scaled = scaler.fit_transform(rfm_log)
 
-    # Đánh giá Silhouette Score cho k từ 3 đến 5
-    best_k = 4
-    for k in [3, 4, 5]:
+    # 6.1 Elbow Method (WCSS / Inertia) + Silhouette Score cho k = 2 → 8
+    k_range = range(2, 9)
+    wcss_values = []
+    silhouette_values = []
+    print("\n  Phân tích Elbow Method (WCSS) & Silhouette Score cho k = 2 → 8:")
+    print(f"  {'k':>3} | {'WCSS (Inertia)':>16} | {'Silhouette Score':>18}")
+    print("  " + "-" * 45)
+    for k in k_range:
         km_test = KMeans(n_clusters=k, random_state=42, n_init=10)
         labels = km_test.fit_predict(rfm_scaled)
-        score = silhouette_score(rfm_scaled, labels)
-        print(f"  + Silhouette Score với k = {k}: {score:.4f}")
+        wcss = km_test.inertia_
+        sil = silhouette_score(rfm_scaled, labels)
+        wcss_values.append(wcss)
+        silhouette_values.append(sil)
+        print(f"  {k:>3} | {wcss:>16,.2f} | {sil:>18.4f}")
 
-    # Áp dụng K-Means với k = 4
+    # Vẽ biểu đồ Elbow + Silhouette (kép trên 1 figure)
+    import matplotlib
+    matplotlib.use('Agg')  # Non-interactive backend
+    import matplotlib.pyplot as plt
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Elbow chart
+    ax1.plot(list(k_range), wcss_values, 'bo-', linewidth=2, markersize=8)
+    ax1.axvline(x=4, color='red', linestyle='--', alpha=0.7, label='k = 4 (Selected)')
+    ax1.set_xlabel('Số cụm (k)', fontsize=12)
+    ax1.set_ylabel('WCSS (Inertia)', fontsize=12)
+    ax1.set_title('Elbow Method — Chọn số cụm tối ưu', fontsize=13, fontweight='bold')
+    ax1.legend(fontsize=10)
+    ax1.grid(True, alpha=0.3)
+
+    # Silhouette chart
+    ax2.plot(list(k_range), silhouette_values, 'gs-', linewidth=2, markersize=8)
+    ax2.axvline(x=4, color='red', linestyle='--', alpha=0.7, label='k = 4 (Selected)')
+    ax2.set_xlabel('Số cụm (k)', fontsize=12)
+    ax2.set_ylabel('Silhouette Score', fontsize=12)
+    ax2.set_title('Silhouette Analysis — Đánh giá chất lượng cụm', fontsize=13, fontweight='bold')
+    ax2.legend(fontsize=10)
+    ax2.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    elbow_chart_path = os.path.join(OUTPUTS_DIR, 'elbow_silhouette_chart.png')
+    plt.savefig(elbow_chart_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"\n  📊 Đã lưu biểu đồ Elbow & Silhouette vào: '{elbow_chart_path}'")
+
+    # Xác định k tối ưu dựa trên Silhouette Score cao nhất
+    best_k = list(k_range)[np.argmax(silhouette_values)]
+    best_sil = max(silhouette_values)
+    # Ưu tiên k=4 nếu sil score của k=4 nằm trong khoảng 95% so với best
+    if silhouette_values[2] >= best_sil * 0.95:  # k=4 là index 2 trong range(2,9)
+        best_k = 4
+    print(f"  → Số cụm được chọn: k = {best_k} (Silhouette = {silhouette_values[best_k - 2]:.4f})")
+
+    # 6.2 Kiểm tra độ ổn định cụm (Cluster Stability) qua nhiều random seeds
+    print("\n  Kiểm tra độ ổn định cụm K-Means (Stability Test, k=4, 5 seeds):")
+    stability_labels = []
+    stability_seeds = [0, 7, 42, 123, 2024]
+    for seed in stability_seeds:
+        km_stab = KMeans(n_clusters=best_k, random_state=seed, n_init=10)
+        stab_labels = km_stab.fit_predict(rfm_scaled)
+        stability_labels.append(stab_labels)
+        sil_stab = silhouette_score(rfm_scaled, stab_labels)
+        print(f"    Seed {seed:>5}: Silhouette = {sil_stab:.4f}")
+
+    # Tính tỷ lệ khách hàng được phân vào cùng một cụm giữa các seed
+    from collections import Counter
+    ref_labels = stability_labels[0]
+    agreement_rates = []
+    for i in range(1, len(stability_labels)):
+        # Sử dụng mapping tối ưu giữa cụm để so sánh (greedy matching by size)
+        from scipy.optimize import linear_sum_assignment
+        contingency = np.zeros((best_k, best_k), dtype=int)
+        for j in range(len(ref_labels)):
+            contingency[ref_labels[j], stability_labels[i][j]] += 1
+        row_ind, col_ind = linear_sum_assignment(-contingency)
+        agreement = sum(contingency[r, c] for r, c in zip(row_ind, col_ind)) / len(ref_labels)
+        agreement_rates.append(agreement)
+    avg_agreement = np.mean(agreement_rates)
+    print(f"  → Tỷ lệ đồng thuận trung bình giữa các seed: {avg_agreement:.2%}")
+    if avg_agreement >= 0.90:
+        print("  ✅ Cụm ổn định (>= 90% đồng thuận).")
+    else:
+        print("  ⚠️ Cụm có thể không ổn định (< 90% đồng thuận).")
+
+    # 6.3 Áp dụng K-Means với k tối ưu đã chọn
     kmeans = KMeans(n_clusters=best_k, random_state=42, n_init=10)
     rfm['KMeans_Cluster'] = kmeans.fit_predict(rfm_scaled)
 
@@ -140,6 +218,30 @@ def rfm_segmentation_and_clustering(conn, output_csv):
         3: 'Cluster 3 - Super VIP'
     }
     rfm['KMeans_Label'] = rfm['KMeans_Cluster'].map(cluster_rank).map(cluster_labels)
+
+    # 6.4 Vẽ biểu đồ phân bố cụm K-Means (Scatter plot 2D: Frequency vs Monetary)
+    fig2, ax3 = plt.subplots(figsize=(10, 7))
+    colors = ['#3498db', '#2ecc71', '#f39c12', '#e74c3c']
+    for cluster_id in sorted(rfm['KMeans_Cluster'].unique()):
+        mask = rfm['KMeans_Cluster'] == cluster_id
+        rank = cluster_rank.get(cluster_id, cluster_id)
+        label = cluster_labels.get(rank, f'Cluster {cluster_id}')
+        color = colors[rank] if rank < len(colors) else '#95a5a6'
+        ax3.scatter(
+            np.log1p(rfm.loc[mask, 'Frequency']),
+            np.log1p(rfm.loc[mask, 'Monetary'].clip(lower=0)),
+            c=color, label=label, alpha=0.6, s=30, edgecolors='white', linewidth=0.3
+        )
+    ax3.set_xlabel('log(1 + Frequency)', fontsize=12)
+    ax3.set_ylabel('log(1 + Monetary)', fontsize=12)
+    ax3.set_title(f'Phân bố cụm K-Means (k={best_k}) trên không gian RFM', fontsize=13, fontweight='bold')
+    ax3.legend(title='Cụm khách hàng', fontsize=9, title_fontsize=10)
+    ax3.grid(True, alpha=0.3)
+    plt.tight_layout()
+    scatter_path = os.path.join(OUTPUTS_DIR, 'kmeans_clusters_scatter.png')
+    plt.savefig(scatter_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"\n  📊 Đã lưu biểu đồ phân bố cụm K-Means vào: '{scatter_path}'")
 
     # Lưu kết quả RFM
     rfm.to_csv(output_csv, index=False)

@@ -705,17 +705,28 @@ with tab6:
     ex_path = os.path.join(BASE_DIR, "outputs", "exchange_rates.csv")
     if os.path.exists(ex_path):
         df_ex = pd.read_csv(ex_path)
-        df_ex["label"] = df_ex["year"].astype(str) + "-" + df_ex["month"].astype(str).str.zfill(2)
+        # Chuẩn hóa tên cột
+        col_map = {c: c.lower() for c in df_ex.columns}
+        df_ex = df_ex.rename(columns=col_map)
+        if "yearmonth" in df_ex.columns:
+            df_ex["label"] = df_ex["yearmonth"].astype(str)
+        elif "year" in df_ex.columns and "month" in df_ex.columns:
+            df_ex["label"] = df_ex["year"].astype(str) + "-" + df_ex["month"].astype(str).str.zfill(2)
+        else:
+            df_ex["label"] = df_ex.index.astype(str)
+
+        usd_col = "usd_rate" if "usd_rate" in df_ex.columns else df_ex.columns[1]
+        eur_col = "eur_rate" if "eur_rate" in df_ex.columns else df_ex.columns[2]
 
         fig_fx = go.Figure()
         fig_fx.add_trace(go.Scatter(
-            x=df_ex["label"], y=df_ex["USD_rate"],
+            x=df_ex["label"], y=df_ex[usd_col],
             name="GBP/USD", mode="lines+markers",
             line=dict(color="#10B981", width=2.5),
             marker=dict(size=7)
         ))
         fig_fx.add_trace(go.Scatter(
-            x=df_ex["label"], y=df_ex["EUR_rate"],
+            x=df_ex["label"], y=df_ex[eur_col],
             name="GBP/EUR", mode="lines+markers",
             line=dict(color="#6366F1", width=2.5),
             marker=dict(size=7)
@@ -739,15 +750,26 @@ with tab6:
 
     if os.path.exists(ex_path) and not df_monthly.empty:
         df_ex2 = pd.read_csv(ex_path)
-        df_ex2["label"] = df_ex2["year"].astype(str) + "-" + df_ex2["month"].astype(str).str.zfill(2)
+        col_map2 = {c: c.lower() for c in df_ex2.columns}
+        df_ex2 = df_ex2.rename(columns=col_map2)
+        if "yearmonth" in df_ex2.columns:
+            df_ex2["label"] = df_ex2["yearmonth"].astype(str)
+        elif "year" in df_ex2.columns and "month" in df_ex2.columns:
+            df_ex2["label"] = df_ex2["year"].astype(str) + "-" + df_ex2["month"].astype(str).str.zfill(2)
+        else:
+            df_ex2["label"] = df_ex2.index.astype(str)
+
+        usd_col2 = "usd_rate" if "usd_rate" in df_ex2.columns else df_ex2.columns[1]
+        eur_col2 = "eur_rate" if "eur_rate" in df_ex2.columns else df_ex2.columns[2]
+
         df_mon2 = df_monthly.copy()
         df_mon2["label"] = df_mon2["YearMonth"].astype(str)
-        df_merged = df_mon2.merge(df_ex2[["label", "USD_rate", "EUR_rate"]], on="label", how="left")
+        df_merged = df_mon2.merge(df_ex2[["label", usd_col2, eur_col2]], on="label", how="left")
         df_merged["Revenue_GBP"] = df_merged["MonthlyRevenue"]
-        df_merged["Revenue_USD"] = (df_merged["MonthlyRevenue"] * df_merged["USD_rate"]).round(2)
-        df_merged["Revenue_EUR"] = (df_merged["MonthlyRevenue"] * df_merged["EUR_rate"]).round(2)
+        df_merged["Revenue_USD"] = (df_merged["MonthlyRevenue"] * df_merged[usd_col2]).round(2)
+        df_merged["Revenue_EUR"] = (df_merged["MonthlyRevenue"] * df_merged[eur_col2]).round(2)
 
-        display_df = df_merged[["label", "Revenue_GBP", "USD_rate", "Revenue_USD", "EUR_rate", "Revenue_EUR"]].copy()
+        display_df = df_merged[["label", "Revenue_GBP", usd_col2, "Revenue_USD", eur_col2, "Revenue_EUR"]].copy()
         display_df.columns = ["Tháng", "DT (GBP £)", "Tỷ Giá USD", "DT (USD $)", "Tỷ Giá EUR", "DT (EUR €)"]
         display_df["DT (GBP £)"] = display_df["DT (GBP £)"].apply(lambda x: f"£ {x:,.2f}")
         display_df["DT (USD $)"] = display_df["DT (USD $)"].apply(lambda x: f"$ {x:,.2f}" if pd.notna(x) else "—")

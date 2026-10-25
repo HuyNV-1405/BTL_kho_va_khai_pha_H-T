@@ -1,9 +1,16 @@
 """
 File: 06_lakehouse_minio_postgres_etl.py
-Mô tả: Đường ống Data Lakehouse hoàn chỉnh theo yeu_cau_moi.md:
+Mô tả: [MỞ RỘNG NÂNG CAO] Đường ống Data Lakehouse theo kiến trúc hiện đại:
        1. Đẩy dữ liệu lên MinIO (S3 Lakehouse: raw/ -> staging/ -> curated/).
        2. Dùng DuckDB đọc/ghi định dạng Parquet nén tối ưu.
        3. Nạp toàn bộ Star Schema vào PostgreSQL Data Warehouse (dwh:5432).
+
+       ⚠️  GHI CHÚ QUAN TRỌNG:
+       Đây là luồng MỞ RỘNG minh họa kiến trúc Data Lakehouse hiện đại.
+       LUỒNG KHO CHÍNH THỨC sử dụng SQLite, nằm tại: scripts/03_etl_pipeline.py
+       Mọi kết quả phân tích OLAP, RFM, Market Basket đều dựa trên kho SQLite chính.
+       Luồng Lakehouse này được phát triển để mở rộng kỹ năng và demo khả năng
+       triển khai trên hạ tầng phân tán (MinIO Object Storage + PostgreSQL RDBMS).
 """
 
 import os
@@ -27,7 +34,8 @@ CFG = {
 def run_lakehouse_pipeline():
     start_time = time.time()
     print("=" * 75)
-    print("KHỞI ĐỘNG ĐƯỜNG ỐNG DATA LAKEHOUSE: MINIO S3 -> DUCKDB -> POSTGRESQL DWH")
+    print("⚠️  [MỞ RỘNG] ĐƯỜNG ỐNG DATA LAKEHOUSE: MINIO S3 -> DUCKDB -> POSTGRESQL")
+    print("    Luồng kho CHÍNH THỨC: scripts/03_etl_pipeline.py (SQLite Star Schema)")
     print("=" * 75)
 
     # --------------------------------------------------------------------------

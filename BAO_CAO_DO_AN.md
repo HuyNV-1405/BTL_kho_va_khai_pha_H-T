@@ -21,17 +21,102 @@
 ### 1.1. Bối cảnh bài toán
 Trong kỷ nguyên số, các doanh nghiệp bán lẻ trực tuyến (E-commerce) phải đối mặt với lượng dữ liệu giao dịch khổng lồ và phân mảnh. Để tối ưu hóa hiệu quả kinh doanh, việc xây dựng một **Kho Dữ Liệu (Data Warehouse - DWH)** tập trung và triển khai các mô hình phân tích kinh doanh (Business Intelligence - BI) là yêu cầu sống còn.
 
-### 1.2. Tập dữ liệu nghiên cứu
-- **Tên tập dữ liệu**: `data.csv` (Online Retail Dataset).
-- **Quy mô ban đầu**: `541,909` dòng giao dịch, 8 thuộc tính chính:
-  - `InvoiceNo`: Mã hóa đơn (ký tự 'C' đại diện đơn hủy).
-  - `StockCode`: Mã mặt hàng lưu kho (SKU).
-  - `Description`: Tên/mô tả sản phẩm.
-  - `Quantity`: Số lượng mua trong giao dịch.
-  - `InvoiceDate`: Thời gian xuất hóa đơn (từ 01/12/2010 đến 09/12/2011).
-  - `UnitPrice`: Đơn giá trên mỗi sản phẩm (GBP).
-  - `CustomerID`: Mã định danh khách hàng.
-  - `Country`: Quốc gia giao dịch.
+### 1.2. Tập dữ liệu nghiên cứu & Nguồn gốc học thuật
+- **Nguồn dữ liệu chính**: `data.csv` (Online Retail Dataset).
+  - **Nguồn gốc học thuật**: Được cung cấp bởi **Dr. Daqing Chen** (Director of Public Analytics Group, School of Engineering, London South Bank University, UK).
+  - **Kho lưu trữ chính thức**: [UCI Machine Learning Repository: Online Retail Dataset](https://archive.ics.uci.edu/dataset/352/online+retail).
+  - **Giấy phép sử dụng (License)**: Creative Commons Attribution 4.0 International (CC BY 4.0). Được phép sử dụng cho mục đích học tập, nghiên cứu và phân tích phi thương mại có trích dẫn.
+  - **Thời gian bao phủ**: Từ **01/12/2010** đến **09/12/2011** (1 năm 1 tuần).
+  - **Quy mô ban đầu**: `541,909` dòng giao dịch với 8 thuộc tính thô.
+- **Nguồn dữ liệu bổ trợ (Enrichment Source)**: 
+  - **Dữ liệu**: Tỷ giá hối đoái ngoại tệ (GBP sang USD và EUR).
+  - **Nguồn API**: [Frankfurter API](https://api.frankfurter.app) tích hợp từ **Ngân hàng Trung ương Châu Âu (European Central Bank - ECB)**.
+  - **Giấy phép & Truy cập**: Open-source, miễn phí, không yêu cầu API key, cung cấp dữ liệu tham chiếu chính thức hàng ngày.
+
+### 1.3. Từ điển dữ liệu nguồn thô (Raw Data Dictionary)
+Bảng thông số kỹ thuật của tập dữ liệu giao dịch thô ban đầu trước khi qua xử lý:
+
+| Tên trường (Field) | Kiểu dữ liệu gốc | Cho phép NULL? | Đơn vị đo | Mô tả nghiệp vụ |
+|---|---|:---:|---|---|
+| `InvoiceNo` | String / Object | Không | Mã định danh | Số hóa đơn gồm 6 chữ số. Nếu bắt đầu bằng `'C'`, đây là hóa đơn hủy (Cancellation). |
+| `StockCode` | String / Object | Không | Mã định danh | Mã sản phẩm lưu kho (SKU - Stock Keeping Unit) gồm 5 hoặc 6 ký tự số/chữ. |
+| `Description` | String / Object | **Có (0.27%)** | Chuỗi văn bản | Tên và mô tả mặt hàng quà tặng lưu niệm bằng tiếng Anh. |
+| `Quantity` | Integer | Không | Sản phẩm (Pcs) | Số lượng hàng hóa được đặt mua trên mỗi dòng hóa đơn. Giá trị âm đại diện cho hàng hoàn/hủy. |
+| `InvoiceDate` | String / Datetime | Không | Thời gian | Thời điểm xuất hóa đơn giao dịch (định dạng: `MM/DD/YYYY HH:MM`). |
+| `UnitPrice` | Float / Decimal | Không | Bảng Anh (£ GBP) | Đơn giá niêm yết bán lẻ trên mỗi đơn vị sản phẩm. |
+| `CustomerID` | Float / Number | **Có (24.93%)** | Mã số nguyên | Mã định danh 5 chữ số của khách hàng đã đăng ký tài khoản. Giá trị NULL đại diện cho khách vãng lai. |
+| `Country` | String / Object | Không | Tên địa danh | Tên quốc gia nơi khách hàng cư trú hoặc đặt hàng vận chuyển đến. |
+
+### 1.4. Quy chuẩn xử lý API Ingestion & Nguyên tắc truy xuất nguồn gốc (Data Lineage)
+Trong thiết kế Kho Dữ Liệu hiện đại, việc gọi API ngoài không nên nạp thẳng một chiều vào Fact/Dim mà phải tuân thủ chuẩn **Auditable Data Lineage**:
+1. **Lưu trữ bản trích xuất thô (Raw Snapshot)**: Toàn bộ phản hồi API dạng JSON được snapshot lưu trữ tại `data/raw/exchange_rates_raw.json` kèm các siêu dữ liệu (metadata):
+   - `extracted_at`: Thời điểm gửi request (ISO 8601 UTC).
+   - `endpoint` & `params`: URL và tham số gọi API (`from=GBP&to=USD,EUR`).
+   - `status` & `record_count`: Trạng thái phản hồi HTTP và số lượng bản ghi nhận được.
+2. **Minh bạch hóa dữ liệu dự phòng (Fallback Provenance)**:
+   - Nếu kết nối internet hoặc API gặp sự cố, hệ thống chuyển sang chế độ dự phòng (Offline Fallback Benchmark).
+   - Để tránh nhầm lẫn giữa dữ liệu ECB thực tế và tỷ giá ước lượng, trường `Is_Fallback` (0: Real Live ECB, 1: Fallback) và `API_Source` được lưu tường minh vào bảng `Dim_Currency` trong DWH.
+3. **Quy trình luân chuyển dữ liệu**:
+   $$\text{Frankfurter API (ECB)} \longrightarrow \text{Raw Snapshot (JSON)} \longrightarrow \text{EDA \& Transform} \longrightarrow \text{Dim\_Currency (DWH)} \longrightarrow \text{OLAP Multi-Currency}$$
+
+### 1.5. Sơ đồ kiến trúc luồng dữ liệu tổng thể (End-to-End Data Lineage Architecture)
+Hệ thống kết nối luồng dữ liệu đa nguồn từ trích xuất đến trình diễn theo sơ đồ dưới đây:
+
+```mermaid
+flowchart TD
+    subgraph SOURCELAYER ["1. DATA SOURCES LAYER (TẦNG NGUỒN DỮ LIỆU)"]
+        S1["Tập dữ liệu Online Retail<br/>(UCI: data.csv ~541K dòng)"]
+        S2["Tỷ giá hối đoái ECB Live<br/>(Frankfurter API: GBP->USD/EUR)"]
+    end
+
+    subgraph RAWLAYER ["2. RAW STORAGE & INGESTION (TẦNG LƯU TRỮ THÔ)"]
+        R1["data/raw/data.csv"]
+        R2["data/raw/exchange_rates_raw.json<br/>(Snapshot kèm Metadata & Is_Fallback)"]
+    end
+
+    subgraph STAGING ["3. STAGING & DATA PROCESSING (LÀM SẠCH & TIỀN XỬ LÝ)"]
+        CL["scripts/01_eda_and_cleaning.py<br/>• Loại hóa đơn hủy 'C'<br/>• Lọc Quantity/Price <= 0<br/>• Chuẩn hóa Description<br/>• Gán IsGuestCustomer (-1)"]
+        CLEAN_CSV["data/processed/data_cleaned.csv<br/>(530,104 dòng sạch)"]
+        CR["scripts/07_api_enrichment.py<br/>(Chuẩn hóa tỷ giá cuối tháng)"]
+    end
+
+    subgraph DWHLAYER ["4. DATA WAREHOUSE LAYER (KHO DỮ LIỆU STAR SCHEMA)"]
+        ETL["scripts/03_etl_pipeline.py<br/>(Surrogate Keys Map & Batch Load)"]
+        subgraph DWH ["retail_dwh.db (SQLite / PostgreSQL DWH)"]
+            DD["Dim_Date (374 ngày)"]
+            DC["Dim_Customer (4,339 khách)"]
+            DP["Dim_Product (3,922 SKU)"]
+            DL["Dim_Location (38 quốc gia)"]
+            DCUR["Dim_Currency (13 tháng)"]
+            FS["Fact_Sales (530,104 dòng)"]
+        end
+    end
+
+    subgraph ANALYTICS ["5. ANALYTICS & DATA MINING (PHÂN TÍCH & KHAI PHÁ)"]
+        OLAP["scripts/04_run_olap_queries.py<br/>• Doanh thu Thời gian / MoM<br/>• Cơ cấu thị trường UK/Global<br/>• Top sản phẩm & Repeat Rate<br/>• Quy đổi đa tiền tệ"]
+        MINING["scripts/05_data_mining.py<br/>• RFM Scoring (8 phân khúc)<br/>• K-Means Clustering (k=4)<br/>• Apriori MBA (992 luật bán kèm)"]
+        OUT["outputs/<br/>• rfm_customer_segments.csv<br/>• market_basket_rules.csv<br/>• exchange_rates.csv"]
+    end
+
+    subgraph PRESENTATION ["6. PRESENTATION & BI DASHBOARD (TRỰC QUAN HÓA)"]
+        ST["Streamlit BI Dashboard (app.py)<br/>• Tab 1: Xu Hướng & MoM<br/>• Tab 2: Địa Lý & Top SKU<br/>• Tab 3: Khách Hàng RFM & K-Means<br/>• Tab 4: Gợi Ý Bán Chéo (Recommender)<br/>• Tab 5: Kiến Trúc Star Schema<br/>• Tab 6: Quy Đổi Tỷ Giá Đa Tiền Tệ"]
+        SUP["Apache Superset (Docker BI)"]
+    end
+
+    S1 --> R1
+    S2 --> R2
+    R1 --> CL --> CLEAN_CSV
+    R2 --> CR
+    CLEAN_CSV --> ETL
+    CR --> ETL
+    ETL --> DD & DC & DP & DL & DCUR & FS
+    FS --> OLAP
+    FS --> MINING
+    MINING --> OUT
+    DWH --> ST
+    OUT --> ST
+    DWH --> SUP
+```
 
 ---
 

@@ -30,14 +30,14 @@
 ### GIAI ĐOẠN 1: KHÁM PHÁ (EDA) & TIỀN XỬ LÝ DỮ LIỆU
 **Mục tiêu**: Hiểu rõ cấu trúc dữ liệu, thống kê các dị biệt và xây dựng bộ lọc chuẩn hóa.
 
-- [ ] **Bước 1.1**: Đọc và kiểm tra cấu trúc `data.csv` (số dòng, số cột, kiểu dữ liệu, dung lượng bộ nhớ).
-- [ ] **Bước 1.2**: Thống kê dữ liệu khuyết thiếu:
+- [x] **Bước 1.1**: Đọc và kiểm tra cấu trúc `data.csv` (số dòng, số cột, kiểu dữ liệu, dung lượng bộ nhớ).
+- [x] **Bước 1.2**: Thống kê dữ liệu khuyết thiếu:
   - Cột `CustomerID`: Xử lý các dòng không có mã khách hàng (tách nhóm khách hàng vãng lai).
   - Cột `Description`: Xử lý giá trị null và các giá trị vô nghĩa (ví dụ: "POSTAGE", "Manual", "AMAZON FEE").
-- [ ] **Bước 1.3**: Xử lý dữ liệu bất thường:
+- [x] **Bước 1.3**: Xử lý dữ liệu bất thường:
   - Lọc đơn hàng hủy: Các mã `InvoiceNo` có tiền tố `'C'`.
   - Xử lý các dòng có `Quantity <= 0` hoặc `UnitPrice <= 0`.
-- [ ] **Bước 1.4**: Xuất tập dữ liệu sạch ban đầu (`data_cleaned.csv` hoặc lưu vào staging).
+- [x] **Bước 1.4**: Xuất tập dữ liệu sạch ban đầu (`data_cleaned.csv` hoặc lưu vào staging).
 
 *Thời gian dự kiến*: 1 - 2 ngày | *Đầu ra*: Jupyter Notebook hoặc script `01_eda_and_cleaning.py`.
 
