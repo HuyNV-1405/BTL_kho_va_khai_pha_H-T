@@ -197,6 +197,16 @@ def load_basket_rules(rules_path):
         return pd.read_csv(rules_path)
     return pd.DataFrame()
 
+@st.cache_data(ttl=3600)
+def load_dwh_row_counts(db_path):
+    conn = sqlite3.connect(db_path)
+    counts = {
+        table: pd.read_sql_query(f"SELECT COUNT(*) AS row_count FROM {table}", conn).iloc[0, 0]
+        for table in ("Fact_Sales", "Dim_Product", "Dim_Customer")
+    }
+    conn.close()
+    return counts
+
 # Tải trước dữ liệu
 df_monthly = load_kpi_and_monthly(DB_PATH)
 df_country = load_country_data(DB_PATH)
@@ -204,6 +214,7 @@ df_products = load_product_data(DB_PATH)
 df_hourly = load_hourly_data(DB_PATH)
 df_rfm = load_rfm_data(RFM_PATH)
 df_rules = load_basket_rules(RULES_PATH)
+dwh_row_counts = load_dwh_row_counts(DB_PATH)
 
 # ------------------------------------------------------------------------------
 # 3. SIDEBAR - BỘ LỌC VÀ THÔNG TIN DỰ ÁN
@@ -229,13 +240,12 @@ with st.sidebar:
         
     st.markdown("---")
     st.markdown("#### 📊 **Thông Tin Kho Dữ Liệu**")
-    st.markdown("""
-    - **PostgreSQL DWH**: 🟢 `localhost:5432` (`dwh`)
-    - **MinIO S3 Lakehouse**: 🟢 `localhost:9000` (`raw, staging, curated`)
-    - **Apache Superset BI**: 🟢 `localhost:8088`
+    st.markdown(f"""
+    - **Kho đang dùng**: SQLite (`database/retail_dwh.db`)
+    - **Hạ tầng mở rộng**: MinIO / PostgreSQL / Superset (Docker)
     - **Mô hình**: Star Schema chuẩn Kimball
-    - **Dòng Fact**: 530,104 giao dịch
-    - **Sản phẩm**: 3,922 SKU | **Khách hàng**: 4,339
+    - **Fact**: {dwh_row_counts['Fact_Sales']:,} dòng
+    - **Sản phẩm**: {dwh_row_counts['Dim_Product']:,} SKU | **Khách hàng**: {dwh_row_counts['Dim_Customer']:,}
     - **Khoảng thời gian**: 12/2010 - 12/2011
     """)
     st.markdown("---")
@@ -253,6 +263,9 @@ total_orders = df_monthly['TotalOrders'].sum()
 total_units = df_monthly['TotalUnitsSold'].sum()
 avg_aov = total_revenue / total_orders
 total_customers = df_country['Customers'].sum()
+repeat_customer_pct = (
+    (df_rfm['Frequency'] > 1).mean() * 100 if not df_rfm.empty else 0
+)
 
 # Hiển thị 4 thẻ KPI Card
 kpi1, kpi2, kpi3, kpi4 = st.columns(4)
@@ -289,7 +302,7 @@ with kpi4:
     <div class="metric-card">
         <div class="metric-label">Khách Hàng Định Danh</div>
         <div class="metric-value">{len(df_rfm):,}</div>
-        <div class="metric-delta" style="color: #F59E0B;">★ 65.58% khách quay lại mua</div>
+        <div class="metric-delta" style="color: #F59E0B;">★ {repeat_customer_pct:.2f}% khách quay lại mua</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -494,7 +507,8 @@ with tab3:
             st.plotly_chart(fig_segment_pie, use_container_width=True)
 
         st.markdown("---")
-        st.subheader("2. Đối Chiếu Thuật Toán Gom Cụm K-Means (k = 4 Cụm)")
+        cluster_count = df_rfm['KMeans_Cluster'].nunique()
+        st.subheader(f"2. Đối Chiếu Thuật Toán Gom Cụm K-Means (k = {cluster_count} Cụm)")
         
         col_km1, col_km2 = st.columns([7, 3])
         with col_km1:
@@ -602,16 +616,21 @@ with tab5:
     col_dwh1, col_dwh2 = st.columns([6, 4])
     
     with col_dwh1:
-        st.markdown("""
+        table_counts = {
+            'Fact_Sales': dwh_row_counts['Fact_Sales'],
+            'Dim_Product': dwh_row_counts['Dim_Product'],
+            'Dim_Customer': dwh_row_counts['Dim_Customer'],
+        }
+        st.markdown(f"""
         #### 🌟 Sơ Đồ Thiết Kế Thực Thể ERD
         Mô hình gồm **1 Fact Table** ở trung tâm và **4 Dimension Tables** bao quanh:
-        - **`Fact_Sales`** *(530,104 dòng)*:
+        - **`Fact_Sales`** *({table_counts['Fact_Sales']:,} dòng)*:
           - Measures: `Quantity`, `UnitPrice`, `TotalRevenue`
           - Degenerate Dimension: `InvoiceNo`
           - Foreign Keys: `DateKey`, `CustomerKey`, `ProductKey`, `LocationKey`
         - **`Dim_Date`** *(374 dòng)*: Chiều thời gian (FullDate, Year, Quarter, Month, Day, DayOfWeek, IsWeekend)
-        - **`Dim_Customer`** *(4,339 dòng)*: Chiều khách hàng (CustomerKey, CustomerID, CustomerCode, IsGuest, Country)
-        - **`Dim_Product`** *(3,922 dòng)*: Chiều sản phẩm (ProductKey, StockCode, Description, UnitPrice_Standard)
+        - **`Dim_Customer`** *({table_counts['Dim_Customer']:,} dòng)*: Chiều khách hàng (CustomerKey, CustomerID, CustomerCode, IsGuest, Country)
+        - **`Dim_Product`** *({table_counts['Dim_Product']:,} dòng)*: Chiều sản phẩm (ProductKey, StockCode, Description, UnitPrice_Standard)
         - **`Dim_Location`** *(38 dòng)*: Chiều địa lý (LocationKey, Country, RegionType: Domestic / International)
         """)
         

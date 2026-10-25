@@ -4,27 +4,21 @@ Dự án nghiên cứu, thiết kế và hiện thực hóa kiến trúc **Hồ 
 
 ---
 
-## 🌟 KIẾN TRÚC HỆ THỐNG HIỆN TẠI (SYSTEM ARCHITECTURE)
+## 🌟 LUỒNG CHÍNH VÀ KIẾN TRÚC MỞ RỘNG (SYSTEM ARCHITECTURE)
 
 ```
-[ Dữ liệu thô CSV ]
-        │
-        ▼
-[ MinIO S3 Lakehouse ] ──► Tầng raw/ (Raw Data)
-        │
-        ├──► DuckDB / PyArrow ──► Tầng staging/ (Parquet nén)
-        │
-        └──► Dimensional Model ──► Tầng curated/ (Star Schema Parquet)
-                                         │
-                                         ▼
-                            [ PostgreSQL DWH (localhost:5432) ]
-                            (dim_date, dim_location, dim_customer, dim_product, fact_sales)
-                                         │
-                   ┌─────────────────────┴─────────────────────┐
-                   ▼                                           ▼
-         [ Apache Superset BI ]                     [ Streamlit Dashboard ]
-         (http://localhost:8088)                     (http://localhost:8501)
+[ data/raw/data.csv ] -> [ EDA & Cleaning ] -> [ SQLite Star Schema DWH ]
+                                                   │
+                               ┌───────────────────┴──────────────────┐
+                               ▼                                      ▼
+                    [ OLAP & Data Mining ]                  [ Streamlit Dashboard ]
+
+Luồng mở rộng tùy chọn: MinIO S3 -> PostgreSQL DWH -> Apache Superset
 ```
+
+SQLite (`database/retail_dwh.db`) là luồng mặc định được dùng bởi ETL, truy vấn OLAP,
+khai phá dữ liệu và dashboard. MinIO/PostgreSQL/Superset là hạ tầng mở rộng, chạy riêng
+qua Docker và không bắt buộc để demo luồng chính.
 
 ---
 
@@ -38,10 +32,11 @@ E:\ổ D\Kho\B\
 │
 ├── data/                       # Dữ liệu phục vụ hệ thống
 │   ├── raw/data.csv            # Dữ liệu giao dịch thô ban đầu
-│   └── processed/data_cleaned.csv  # Dữ liệu sạch đã tiền xử lý
+│   ├── raw/exchange_rates_raw.json  # Snapshot phản hồi API tỷ giá
+│   └── processed/              # Dữ liệu sạch và dữ liệu bị loại kèm lý do
 │
 ├── database/                   # Kho dữ liệu & Tài liệu thiết kế
-│   ├── retail_dwh.db           # Cơ sở dữ liệu SQLite Data Warehouse dự phòng
+│   ├── retail_dwh.db           # Kho dữ liệu SQLite dùng trong luồng chính
 │   ├── 02_schema_ddl.sql       # Kịch bản DDL Star Schema
 │   └── 02_data_modeling.md     # Tài liệu thiết kế mô hình đa chiều Kimball
 │
@@ -49,14 +44,15 @@ E:\ổ D\Kho\B\
 │   ├── 01_eda_and_cleaning.py  # Giai đoạn 1: EDA & Làm sạch dữ liệu
 │   ├── 03_etl_pipeline.py      # Giai đoạn 3: ETL Pipeline nạp vào SQLite
 │   ├── 04_run_olap_queries.py  # Giai đoạn 4: Thực thi 8 truy vấn phân tích OLAP
-│   ├── 05_data_mining.py       # Giai đoạn 5: Khai phá dữ liệu RFM & Phân tích giỏ hàng
+│   ├── 05_data_mining.py       # Giai đoạn 5: RFM, K-Means & Market Basket
+│   ├── 03b_dwh_test_reconciliation.py # Kiểm thử và đối soát kho
 │   └── 06_lakehouse_minio_postgres_etl.py  # Data Lakehouse: MinIO S3 & PostgreSQL DWH
 │
 ├── sql/                        # Kịch bản SQL phân tích
 │   ├── 02_schema_ddl.sql       # DDL tạo Schema
 │   └── 04_olap_queries.sql     # 8 bài toán truy vấn OLAP & SQL nâng cao
 │
-├── outputs/                    # Kết quả xuất ra từ mô hình phân tích & khai phá dữ liệu
+├── outputs/                    # Kết quả khai phá, dữ liệu tỷ giá và báo cáo audit/test
 │   ├── rfm_customer_segments.csv   # Kết quả phân khúc khách hàng RFM & K-Means
 │   └── market_basket_rules.csv     # 992 luật kết hợp gợi ý bán chéo (Apriori)
 │

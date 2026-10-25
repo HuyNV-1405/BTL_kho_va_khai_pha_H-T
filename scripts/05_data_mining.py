@@ -134,6 +134,13 @@ def rfm_segmentation_and_clustering(conn, output_csv):
         silhouette_values.append(sil)
         print(f"  {k:>3} | {wcss:>16,.2f} | {sil:>18.4f}")
 
+    # Xác định số cụm theo Silhouette; giữ k=4 nếu gần bằng nghiệm tốt nhất.
+    best_k = list(k_range)[np.argmax(silhouette_values)]
+    best_sil = max(silhouette_values)
+    k4_index = 4 - k_range.start
+    if silhouette_values[k4_index] >= best_sil * 0.95:
+        best_k = 4
+
     # Vẽ biểu đồ Elbow + Silhouette (kép trên 1 figure)
     import matplotlib
     matplotlib.use('Agg')  # Non-interactive backend
@@ -143,7 +150,7 @@ def rfm_segmentation_and_clustering(conn, output_csv):
 
     # Elbow chart
     ax1.plot(list(k_range), wcss_values, 'bo-', linewidth=2, markersize=8)
-    ax1.axvline(x=4, color='red', linestyle='--', alpha=0.7, label='k = 4 (Selected)')
+    ax1.axvline(x=best_k, color='red', linestyle='--', alpha=0.7, label=f'k = {best_k} (Selected)')
     ax1.set_xlabel('Số cụm (k)', fontsize=12)
     ax1.set_ylabel('WCSS (Inertia)', fontsize=12)
     ax1.set_title('Elbow Method — Chọn số cụm tối ưu', fontsize=13, fontweight='bold')
@@ -152,7 +159,7 @@ def rfm_segmentation_and_clustering(conn, output_csv):
 
     # Silhouette chart
     ax2.plot(list(k_range), silhouette_values, 'gs-', linewidth=2, markersize=8)
-    ax2.axvline(x=4, color='red', linestyle='--', alpha=0.7, label='k = 4 (Selected)')
+    ax2.axvline(x=best_k, color='red', linestyle='--', alpha=0.7, label=f'k = {best_k} (Selected)')
     ax2.set_xlabel('Số cụm (k)', fontsize=12)
     ax2.set_ylabel('Silhouette Score', fontsize=12)
     ax2.set_title('Silhouette Analysis — Đánh giá chất lượng cụm', fontsize=13, fontweight='bold')
@@ -165,16 +172,10 @@ def rfm_segmentation_and_clustering(conn, output_csv):
     plt.close()
     print(f"\n  📊 Đã lưu biểu đồ Elbow & Silhouette vào: '{elbow_chart_path}'")
 
-    # Xác định k tối ưu dựa trên Silhouette Score cao nhất
-    best_k = list(k_range)[np.argmax(silhouette_values)]
-    best_sil = max(silhouette_values)
-    # Ưu tiên k=4 nếu sil score của k=4 nằm trong khoảng 95% so với best
-    if silhouette_values[2] >= best_sil * 0.95:  # k=4 là index 2 trong range(2,9)
-        best_k = 4
     print(f"  → Số cụm được chọn: k = {best_k} (Silhouette = {silhouette_values[best_k - 2]:.4f})")
 
     # 6.2 Kiểm tra độ ổn định cụm (Cluster Stability) qua nhiều random seeds
-    print("\n  Kiểm tra độ ổn định cụm K-Means (Stability Test, k=4, 5 seeds):")
+    print(f"\n  Kiểm tra độ ổn định cụm K-Means (Stability Test, k={best_k}, 5 seeds):")
     stability_labels = []
     stability_seeds = [0, 7, 42, 123, 2024]
     for seed in stability_seeds:
@@ -211,11 +212,14 @@ def rfm_segmentation_and_clustering(conn, output_csv):
     # Đặt tên cụm dựa trên Monetary trung bình
     cluster_monetary = rfm.groupby('KMeans_Cluster')['Monetary'].mean().sort_values()
     cluster_rank = {cluster: idx for idx, cluster in enumerate(cluster_monetary.index)}
+    value_names = {
+        2: ['Lower Value', 'Higher Value'],
+        3: ['Low Value', 'Moderate Value', 'High Value'],
+        4: ['Low Value', 'Moderate Value', 'High Value', 'Super VIP']
+    }.get(best_k, [f'Value Tier {rank + 1}' for rank in range(best_k)])
     cluster_labels = {
-        0: 'Cluster 0 - Low Value',
-        1: 'Cluster 1 - Moderate Value',
-        2: 'Cluster 2 - High Value',
-        3: 'Cluster 3 - Super VIP'
+        rank: f'Cluster {rank + 1} - {value_name}'
+        for rank, value_name in enumerate(value_names)
     }
     rfm['KMeans_Label'] = rfm['KMeans_Cluster'].map(cluster_rank).map(cluster_labels)
 

@@ -86,7 +86,7 @@
 - [x] **Bước 4.2**: Áp dụng các kỹ thuật OLAP nâng cao:
   - Dùng CTE + UNION ALL mô phỏng `ROLLUP` đa cấp (Năm -> Quý -> Tháng).
   - Sử dụng Window Functions (`RANK()`, `DENSE_RANK()`, `SUM() OVER(PARTITION BY ...)`, `LAG()` tính tốc độ tăng trưởng MoM và YTD Running Total).
-  - Tính toán các chỉ số kinh doanh: Tỷ lệ quay lại của khách hàng (Repeat Customer Rate đạt 65.58%), Giá trị đơn hàng trung bình (AOV), Khung giờ vàng mua sắm (Peak Hours).
+  - Tính toán các chỉ số kinh doanh: Tỷ lệ quay lại của khách hàng (65.58%), AOV (£533.17), khung giờ vàng mua sắm (Peak Hours).
 
 *Thời gian dự kiến*: 1 - 2 ngày | *Đầu ra*: Tệp SQL `04_olap_queries.sql` & Script kiểm thử `04_run_olap_queries.py`.
 
@@ -98,9 +98,9 @@
 - [x] **Bước 5.1 - Phân khúc khách hàng RFM (Recency, Frequency, Monetary)**:
   - Tính toán chỉ số R, F, M cho 4,338 khách hàng định danh từ `Fact_Sales`.
   - Chia điểm ngũ vị phân (Quantiles 1-5) và phân nhóm 8 phân khúc nghiệp vụ (Champions, Loyal, At Risk, Hibernating, v.v.).
-  - Áp dụng thuật toán Gom cụm **K-Means Clustering** (k=4 đạt Silhouette Score tối ưu = 0.3371).
+  - So sánh K-Means với k từ 2 đến 8; chọn **k=2** theo Silhouette Score cao nhất (**0.4328**), độ đồng thuận qua 5 seeds là **99.98%**.
 - [x] **Bước 5.2 - Phân tích Giỏ hàng (Market Basket Analysis)**:
-  - Chuyển đổi 18,275 đơn hàng đa sản phẩm thành ma trận nhị phân (One-hot Transaction Matrix 18,275 x 3,776).
+  - Chuyển đổi 18,275 đơn hàng đa sản phẩm thành ma trận nhị phân (One-hot Transaction Matrix 18,275 x 3,775).
   - Chạy thuật toán **Apriori** (`min_support = 0.015`) tìm 912 tập mục phổ biến.
   - Trích xuất 992 luật kết hợp (Association Rules) với `Lift >= 1.2` và `Confidence lên đến 91.15%`.
   - Rút ra đề xuất chiến lược bán chéo các bộ sản phẩm quà tặng / đồ uống / trang trí.
@@ -138,4 +138,3 @@
 | **Giai đoạn 5** | RFM Segmentation & Market Basket | `scripts/05_data_mining.py`, `outputs/` | ✅ Hoàn thành |
 | **Giai đoạn 6** | Dashboard Web & Báo cáo hoàn chỉnh | `app.py` (6 tabs), `BAO_CAO_DO_AN.md` | ✅ Hoàn thành (100%) |
 | **Mở rộng** | **API Enrichment – Frankfurter (ECB)** | `scripts/07_api_enrichment.py`, `outputs/exchange_rates.csv`, `Dim_Currency` trong DWH | ✅ **Đầy đủ (EDA + ETL + OLAP + Dashboard)** |
-

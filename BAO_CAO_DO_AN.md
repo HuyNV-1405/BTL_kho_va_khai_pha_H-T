@@ -25,7 +25,7 @@ Trong kỷ nguyên số, các doanh nghiệp bán lẻ trực tuyến (E-commerc
 - **Nguồn dữ liệu chính**: `data.csv` (Online Retail Dataset).
   - **Nguồn gốc học thuật**: Được cung cấp bởi **Dr. Daqing Chen** (Director of Public Analytics Group, School of Engineering, London South Bank University, UK).
   - **Kho lưu trữ chính thức**: [UCI Machine Learning Repository: Online Retail Dataset](https://archive.ics.uci.edu/dataset/352/online+retail).
-  - **Giấy phép sử dụng (License)**: Creative Commons Attribution 4.0 International (CC BY 4.0). Được phép sử dụng cho mục đích học tập, nghiên cứu và phân tích phi thương mại có trích dẫn.
+  - **Giấy phép sử dụng (License)**: Creative Commons Attribution 4.0 International (CC BY 4.0); cần ghi công nguồn theo điều khoản giấy phép.
   - **Thời gian bao phủ**: Từ **01/12/2010** đến **09/12/2011** (1 năm 1 tuần).
   - **Quy mô ban đầu**: `541,909` dòng giao dịch với 8 thuộc tính thô.
 - **Nguồn dữ liệu bổ trợ (Enrichment Source)**: 
@@ -76,25 +76,25 @@ flowchart TD
 
     subgraph STAGING ["3. STAGING & DATA PROCESSING (LÀM SẠCH & TIỀN XỬ LÝ)"]
         CL["scripts/01_eda_and_cleaning.py<br/>• Loại hóa đơn hủy 'C'<br/>• Lọc Quantity/Price <= 0<br/>• Chuẩn hóa Description<br/>• Gán IsGuestCustomer (-1)"]
-        CLEAN_CSV["data/processed/data_cleaned.csv<br/>(530,104 dòng sạch)"]
+        CLEAN_CSV["data/processed/data_cleaned.csv<br/>(524,874 dòng sạch)"]
         CR["scripts/07_api_enrichment.py<br/>(Chuẩn hóa tỷ giá cuối tháng)"]
     end
 
     subgraph DWHLAYER ["4. DATA WAREHOUSE LAYER (KHO DỮ LIỆU STAR SCHEMA)"]
         ETL["scripts/03_etl_pipeline.py<br/>(Surrogate Keys Map & Batch Load)"]
-        subgraph DWH ["retail_dwh.db (SQLite / PostgreSQL DWH)"]
+        subgraph DWH ["retail_dwh.db (SQLite DWH chính; PostgreSQL là luồng mở rộng)"]
             DD["Dim_Date (374 ngày)"]
             DC["Dim_Customer (4,339 khách)"]
-            DP["Dim_Product (3,922 SKU)"]
+            DP["Dim_Product (3,921 SKU)"]
             DL["Dim_Location (38 quốc gia)"]
             DCUR["Dim_Currency (13 tháng)"]
-            FS["Fact_Sales (530,104 dòng)"]
+            FS["Fact_Sales (524,874 dòng)"]
         end
     end
 
     subgraph ANALYTICS ["5. ANALYTICS & DATA MINING (PHÂN TÍCH & KHAI PHÁ)"]
         OLAP["scripts/04_run_olap_queries.py<br/>• Doanh thu Thời gian / MoM<br/>• Cơ cấu thị trường UK/Global<br/>• Top sản phẩm & Repeat Rate<br/>• Quy đổi đa tiền tệ"]
-        MINING["scripts/05_data_mining.py<br/>• RFM Scoring (8 phân khúc)<br/>• K-Means Clustering (k=4)<br/>• Apriori MBA (992 luật bán kèm)"]
+        MINING["scripts/05_data_mining.py<br/>• RFM Scoring (8 phân khúc)<br/>• K-Means Clustering (k=2)<br/>• Apriori MBA (992 luật bán kèm)"]
         OUT["outputs/<br/>• rfm_customer_segments.csv<br/>• market_basket_rules.csv<br/>• exchange_rates.csv"]
     end
 
@@ -129,15 +129,16 @@ Script thực hiện: `scripts/01_eda_and_cleaning.py`.
   - `CustomerID`: Thiếu **135,080** bản ghi (~24.93%) do khách hàng vãng lai (Guest Checkout) không tạo tài khoản.
   - `Description`: Thiếu **1,454** bản ghi (~0.27%).
 - **Dị biệt nghiệp vụ**:
-  - Có **9,288** hóa đơn bị hủy (bắt đầu bằng chữ `'C'`).
-  - Có **10,624** dòng có số lượng `Quantity <= 0` và `UnitPrice <= 0` (hàng hỏng, quà tặng thử nghiệm, phí quản trị).
+  - Phát hiện **5,268** bản ghi trùng lặp tuyệt đối; chỉ giữ bản ghi đầu tiên.
+  - Sau khi xử lý trùng, loại **9,251** dòng thuộc hóa đơn hủy, **1,336** dòng có `Quantity <= 0`, và **1,180** dòng có `UnitPrice <= 0`.
+  - Có **1,454** dòng thiếu `Description`; mô tả được khôi phục theo `StockCode` khi có ánh xạ, các trường hợp còn lại được gắn `UNKNOWN DESCRIPTION`.
 
 ### 2.2. Chiến lược xử lý & Làm sạch
-1. Lọc bỏ các đơn hàng hủy và các giao dịch có `Quantity <= 0` hoặc `UnitPrice <= 0`.
-2. Chuẩn hóa chuỗi mô tả `Description`: Viết hoa toàn bộ, cắt khoảng trắng thừa.
-3. Chuẩn hóa `CustomerID`: Gán nhãn khách vãng lai `CustomerID = -1` (với cờ `IsGuestCustomer = 1`) để không làm mất thông tin doanh số kế toán.
-4. Trích xuất các thuộc tính thời gian phái sinh (`Year`, `Month`, `Day`, `Hour`, `DayOfWeek`).
-- **Kết quả**: Thu được **530,104** dòng giao dịch sạch hợp lệ lưu tại `data/processed/data_cleaned.csv`.
+1. Loại bản ghi trùng tuyệt đối, hóa đơn hủy và giao dịch có số lượng/đơn giá không dương; lưu riêng dữ liệu bị loại kèm lý do trong `data/processed/data_rejected.csv`.
+2. Chuẩn hóa chuỗi mô tả `Description` (viết hoa, bỏ khoảng trắng thừa); khôi phục mô tả thiếu theo `StockCode` khi có thể.
+3. Chuẩn hóa `CustomerID`: gán mã `-1` và cờ `IsGuestCustomer = 1` cho khách vãng lai, giữ giao dịch cho doanh thu nhưng loại khỏi RFM.
+4. Tính `LineRevenue = Quantity × UnitPrice` sau khi chuẩn hóa giá và tạo thuộc tính thời gian (`Year`, `Month`, `Day`, `Hour`, `DayOfWeek`).
+- **Kết quả**: **524,874** dòng sạch (96.86% dữ liệu ban đầu), doanh thu **£10,642,110.80**, lưu tại `data/processed/data_cleaned.csv`. Audit waterfall được lưu tại `outputs/data_cleaning_audit.csv`.
 
 ---
 
@@ -151,11 +152,11 @@ Tài liệu thiết kế: `database/02_data_modeling.md` | DDL Schema: `database
 3. **Các chiều phân tích (Dimensions)**:
    - `Dim_Date`: Quản lý 374 ngày dương lịch (Ngày, Tháng, Quý, Năm, Ngày trong tuần, Cuối tuần).
    - `Dim_Customer`: 4,339 khách hàng (Khóa đại diện `CustomerKey`, `CustomerID`, phân loại Guest).
-   - `Dim_Product`: 3,922 mặt hàng (`StockCode`, `Description`, `UnitPrice_Standard`).
+   - `Dim_Product`: 3,921 mặt hàng (`StockCode`, `Description`, `UnitPrice_Standard`).
    - `Dim_Location`: 38 quốc gia (`Country`, phân loại vùng: `Domestic` UK vs `International`).
    - `Dim_Currency` *(Mở rộng)*: 13 tháng tỷ giá GBP sang USD và EUR lấy từ **Frankfurter API (European Central Bank - ECB)** để hỗ trợ phân tích tài chính đa tiền tệ.
 4. **Bảng sự kiện (Fact Table)**:
-   - `Fact_Sales`: 530,104 bản ghi.
+   - `Fact_Sales`: 524,874 bản ghi.
    - Các độ đo (Measures): `Quantity`, `UnitPrice`, `TotalRevenue` (= Quantity * UnitPrice).
    - Chiều thoái hóa (Degenerate Dimension): `InvoiceNo` phục vụ gom nhóm giỏ hàng.
 
@@ -172,11 +173,9 @@ Script thực hiện: `scripts/03_etl_pipeline.py`.
 
 ### 4.2. Kiểm thử tính toàn vẹn (Integrity & Reconciliation)
 - **Ràng buộc khóa ngoại**: **0 lỗi mồ côi** (100% dòng Fact khớp hoàn hảo với 4 bảng Dim).
-- **Đối chiếu doanh thu**:
-  - Doanh thu từ file sạch nguồn: **10,666,684.54 GBP**.
-  - Doanh thu nạp vào `Fact_Sales`: **10,666,684.54 GBP**.
-  - Sai lệch: **0.004 GBP** (Khớp **100.00%**).
-- **Thời gian thực thi**: Toàn bộ quy trình hoàn tất trong **23.67 giây**.
+- **Kiểm thử và đối soát**: Bộ kiểm thử tự động gồm 25 phép kiểm tra; hiện tại **25/25 đạt**, bao gồm đối chiếu số dòng, tổng số lượng, doanh thu, khóa ngoại, quy tắc nghiệp vụ và một số lát cắt.
+  - Doanh thu dữ liệu sạch: **£10,642,110.80**.
+  - Doanh thu `Fact_Sales`: **£10,642,110.80** (sai lệch **£0.00** ở độ chính xác 2 chữ số thập phân).
 
 ---
 
@@ -189,11 +188,11 @@ Script thực hiện: `sql/04_olap_queries.sql` và `scripts/04_run_olap_queries
 - **Mô phỏng đa cấp ROLLUP**: Kết hợp CTE và `UNION ALL` để tổng hợp 3 cấp độ (Năm -> Quý -> Tháng).
 
 ### 5.2. Các phát hiện kinh doanh then chốt
-1. **Xu hướng mùa vụ**: Doanh thu đạt đỉnh vào **Tháng 11/2011 (1.51M GBP)**, tăng trưởng MoM đạt **+30.69%** nhờ mùa mua sắm Black Friday và chuẩn bị Giáng sinh.
-2. **Cơ cấu thị trường**: Vương quốc Anh chiếm **84.61%** doanh thu (thị trường nội địa hạt nhân). Top thị trường quốc tế gồm Hà Lan (2.68%), Ireland (2.66%), Đức (2.15%).
+1. **Xu hướng mùa vụ**: Doanh thu đạt đỉnh vào **Tháng 11/2011 (£1,503,866.78)**, tăng trưởng MoM **+30.63%**; đây là quan sát trong dữ liệu, phù hợp với mùa mua sắm cuối năm.
+2. **Cơ cấu thị trường**: Vương quốc Anh chiếm **84.59%** doanh thu. Các thị trường quốc tế đóng góp cao gồm Hà Lan (2.68%), EIRE (2.66%) và Đức (2.15%).
 3. **Khung giờ vàng mua sắm**: Tập trung cao độ từ **10:00 sáng đến 15:00 chiều**, đỉnh cao là **12:00 trưa** (3,220 đơn hàng).
 4. **Tỷ lệ khách hàng quay lại (Repeat Customer Rate)**: Đạt **65.58%** (2,845 / 4,338 khách hàng định danh mua từ 2 lần trở lên).
-5. **Quy đổi đa tiền tệ (Frankfurter API / ECB)**: Tổng doanh thu toàn kỳ **£10.67M GBP** tương đương **$16.04M USD** và **€12.27M EUR**. Tháng có tỷ giá GBP/USD cao nhất là **Tháng 4/2011 (1.6665 USD/GBP)**; biến động giảm sâu nhất là **Tháng 9/2011 (MoM Delta: -0.0736 USD)**.
+5. **Quy đổi đa tiền tệ (Frankfurter API / ECB)**: Áp dụng tỷ giá cuối tháng cho doanh thu từng tháng, tổng doanh thu tương đương khoảng **$17.00M USD** và **€12.24M EUR**. Tỷ giá GBP/USD cao nhất trong giai đoạn là **Tháng 4/2011 (1.6665 USD/GBP)**; mức giảm MoM lớn nhất là **Tháng 9/2011 (-0.0736 USD)**.
 
 ---
 
@@ -205,17 +204,17 @@ Script thực hiện: `scripts/05_data_mining.py`.
 - **Chỉ số RFM**:
   - `Recency (R)`: Trung bình 92.5 ngày.
   - `Frequency (F)`: Trung bình 4.27 đơn hàng (cao nhất 209 đơn).
-  - `Monetary (M)`: Trung bình 2,054.27 GBP/khách (cao nhất 280,206 GBP).
+  - `Monetary (M)`: Trung bình 2,048.69 GBP/khách (cao nhất 280,206.02 GBP).
 - **Phân nhóm khách hàng**:
-  - **Champions (VIP)**: 962 khách hàng (~22%), đóng góp hơn 65% doanh thu, chi tiêu trung bình 6,038 GBP.
-  - **Loyal Customers**: 758 khách hàng, chi tiêu trung bình 1,842 GBP.
+  - **Champions (VIP)**: 957 khách hàng (~22%), tổng chi tiêu **£5,791,640.74**, trung bình **£6,051.87/khách**.
+  - **Loyal Customers**: 764 khách hàng, chi tiêu trung bình **£1,827.90/khách**.
   - **At Risk**: 442 khách hàng (nguy cơ rời bỏ).
   - **Hibernating / Lost**: 1,065 khách hàng (ngủ đông / đã rời bỏ).
-- **Phân cụm K-Means**: Áp dụng chuẩn hóa Log-transform + Z-score scaler. Với **k = 4 cụm**, mô hình đạt chỉ số Silhouette Score tối ưu **0.3371**.
+- **Phân cụm K-Means**: Áp dụng Log-transform + Z-score scaling và so sánh k từ 2 đến 8. Silhouette cao nhất ở **k = 2 (0.4328)**; k=4 đạt 0.3375 nên không thỏa tiêu chí ưu tiên k=4 trong ngưỡng 95%. Kết quả k=2 ổn định qua 5 random seeds (đồng thuận trung bình 99.98%): cụm Lower Value có 2,672 khách, cụm Higher Value có 1,666 khách.
 - File kết quả: `outputs/rfm_customer_segments.csv`.
 
 ### 6.2. Phân tích Giỏ hàng (Market Basket Analysis - Apriori)
-- **Tập giao dịch**: 18,275 đơn hàng đa sản phẩm.
+- **Tập giao dịch**: 18,275 đơn hàng đa sản phẩm, 3,775 sản phẩm sau loại trừ các dòng phí/phi sản phẩm.
 - **Thuật toán Apriori**: Ngưỡng `min_support = 1.5%` phát hiện 912 tập mục phổ biến và sinh ra **992 luật kết hợp** có `Lift >= 1.2`.
 - **Luật bán kèm tiêu biểu (Cross-selling)**:
   - Khách mua `REGENCY TEA PLATE PINK` -> Gợi ý mua `REGENCY TEA PLATE GREEN` (**Confidence: 91.15%, Lift: 43.83**).
@@ -230,7 +229,7 @@ Script thực hiện: `scripts/05_data_mining.py`.
 Ứng dụng web: `app.py` (Chạy bằng lệnh: `streamlit run app.py`).
 
 ### Các tính năng chính trên Dashboard:
-1. **Executive KPI Cards**: Hiển thị Doanh thu tổng (10.67M GBP), Tổng đơn (22.2K đơn), AOV (480.3 GBP), Số khách định danh (4,338 khách).
+1. **Executive KPI Cards**: Hiển thị doanh thu tổng (**£10.64M**), tổng đơn, AOV (**£533.17**) và số khách định danh (**4,338**).
 2. **Tab 1 - Xu hướng Doanh thu**: Biểu đồ kết hợp Bar-Line thể hiện doanh thu, số đơn và tỷ lệ tăng trưởng MoM theo tháng, phân tích khung giờ vàng.
 3. **Tab 2 - Địa lý & Sản phẩm**: Biểu đồ phân bổ tỷ trọng doanh thu UK vs Quốc tế, Top 10 sản phẩm bán chạy nhất và doanh thu cao nhất.
 4. **Tab 3 - Chân dung Khách hàng RFM**: Biểu đồ Treemap doanh thu theo phân khúc RFM, biểu đồ phân tán K-Means và danh sách Top Champions VIP.

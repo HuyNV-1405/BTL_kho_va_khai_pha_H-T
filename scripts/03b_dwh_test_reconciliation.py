@@ -308,9 +308,9 @@ def run_dwh_test_suite(db_path=None, clean_csv=None, output_report=None, verbose
     test_counter += 1
 
     # --------------------------------------------------------------------------
-    # NHÓM 6: KIỂM THỬ TÍNH ĐƠN NHẤT & TÁI LẬP ETL (IDEMPOTENCY & UNIQUENESS)
+    # NHÓM 6: KIỂM TRA TÍNH ĐƠN NHẤT CỦA KHÓA (KEY UNIQUENESS)
     # --------------------------------------------------------------------------
-    print("\n[PHẦN 6/6] KIỂM THỬ TÍNH ĐƠN NHẤT & TÁI LẬP ETL (IDEMPOTENCY & UNIQUENESS)")
+    print("\n[PHẦN 6/6] KIỂM TRA TÍNH ĐƠN NHẤT CỦA KHÓA (KEY UNIQUENESS)")
     print("-" * 80)
 
     # 6.1 Khóa chính Fact_Sales đơn nhất (không bị duplicate dòng khi nạp)
@@ -320,7 +320,7 @@ def run_dwh_test_suite(db_path=None, clean_csv=None, output_report=None, verbose
         )
     """).fetchone()[0]
     record_test(
-        f"TC{test_counter:02d}", "Idempotency", "Tính đơn nhất của khóa chính SalesKey trong Fact_Sales",
+        f"TC{test_counter:02d}", "Uniqueness", "Tính đơn nhất của khóa chính SalesKey trong Fact_Sales",
         "0 bản ghi trùng", f"{dup_saleskey_count} bản ghi trùng", dup_saleskey_count, "Duplicates == 0",
         dup_saleskey_count == 0
     )
@@ -337,7 +337,7 @@ def run_dwh_test_suite(db_path=None, clean_csv=None, output_report=None, verbose
     for tbl, nat_key, q in dim_dup_queries:
         dup_cnt = cursor.execute(q).fetchone()[0]
         record_test(
-            f"TC{test_counter:02d}", "Idempotency", f"Tính đơn nhất của Natural Key '{nat_key}' trong '{tbl}'",
+            f"TC{test_counter:02d}", "Uniqueness", f"Tính đơn nhất của Natural Key '{nat_key}' trong '{tbl}'",
             "0 bản ghi trùng", f"{dup_cnt} bản ghi trùng", dup_cnt, "Duplicates == 0",
             dup_cnt == 0
         )
