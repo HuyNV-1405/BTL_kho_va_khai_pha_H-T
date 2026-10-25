@@ -102,9 +102,25 @@ DB_PATH = os.path.join(BASE_DIR, "database", "retail_dwh.db")
 RFM_PATH = os.path.join(BASE_DIR, "outputs", "rfm_customer_segments.csv")
 RULES_PATH = os.path.join(BASE_DIR, "outputs", "market_basket_rules.csv")
 
+def _sales_filter_clause(region_type=None, customer_ids=None):
+    clauses = []
+    params = []
+    if region_type:
+        clauses.append("l.RegionType = ?")
+        params.append(region_type)
+    if customer_ids is not None:
+        if not customer_ids:
+            clauses.append("1 = 0")
+        else:
+            placeholders = ", ".join("?" for _ in customer_ids)
+            clauses.append(f"c.CustomerID IN ({placeholders})")
+            params.extend(customer_ids)
+    return (" AND " + " AND ".join(clauses) if clauses else ""), params
+
 @st.cache_data(ttl=3600)
-def load_kpi_and_monthly(db_path):
+def load_kpi_and_monthly(db_path, region_type=None, customer_ids=None):
     conn = sqlite3.connect(db_path)
+    filter_sql, params = _sales_filter_clause(region_type, customer_ids)
     q_monthly = """
     SELECT 
         d.YearMonth,
@@ -116,10 +132,14 @@ def load_kpi_and_monthly(db_path):
         ROUND(SUM(f.TotalRevenue) / COUNT(DISTINCT f.InvoiceNo), 2) AS AOV
     FROM Fact_Sales f
     JOIN Dim_Date d ON f.DateKey = d.DateKey
+    JOIN Dim_Location l ON f.LocationKey = l.LocationKey
+    JOIN Dim_Customer c ON f.CustomerKey = c.CustomerKey
+    WHERE 1 = 1
+    """ + filter_sql + """
     GROUP BY d.YearMonth, d.Year, d.Month
     ORDER BY d.Year, d.Month
     """
-    df_monthly = pd.read_sql_query(q_monthly, conn)
+    df_monthly = pd.read_sql_query(q_monthly, conn, params=params)
     
     # Tính MoM Growth %
     df_monthly['PrevRevenue'] = df_monthly['MonthlyRevenue'].shift(1)
@@ -131,8 +151,9 @@ def load_kpi_and_monthly(db_path):
     return df_monthly
 
 @st.cache_data(ttl=3600)
-def load_country_data(db_path):
+def load_country_data(db_path, region_type=None, customer_ids=None):
     conn = sqlite3.connect(db_path)
+    filter_sql, params = _sales_filter_clause(region_type, customer_ids)
     q = """
     SELECT 
         l.Country,
@@ -143,16 +164,20 @@ def load_country_data(db_path):
         ROUND(SUM(f.TotalRevenue), 2) AS Revenue
     FROM Fact_Sales f
     JOIN Dim_Location l ON f.LocationKey = l.LocationKey
+    JOIN Dim_Customer c ON f.CustomerKey = c.CustomerKey
+    WHERE 1 = 1
+    """ + filter_sql + """
     GROUP BY l.Country, l.RegionType
     ORDER BY Revenue DESC
     """
-    df = pd.read_sql_query(q, conn)
+    df = pd.read_sql_query(q, conn, params=params)
     conn.close()
     return df
 
 @st.cache_data(ttl=3600)
-def load_product_data(db_path):
+def load_product_data(db_path, region_type=None, customer_ids=None):
     conn = sqlite3.connect(db_path)
+    filter_sql, params = _sales_filter_clause(region_type, customer_ids)
     q = """
     SELECT 
         p.StockCode,
@@ -162,15 +187,20 @@ def load_product_data(db_path):
         ROUND(AVG(f.UnitPrice), 2) AS AvgPrice
     FROM Fact_Sales f
     JOIN Dim_Product p ON f.ProductKey = p.ProductKey
+    JOIN Dim_Location l ON f.LocationKey = l.LocationKey
+    JOIN Dim_Customer c ON f.CustomerKey = c.CustomerKey
+    WHERE 1 = 1
+    """ + filter_sql + """
     GROUP BY p.StockCode, p.Description
     """
-    df = pd.read_sql_query(q, conn)
+    df = pd.read_sql_query(q, conn, params=params)
     conn.close()
     return df
 
 @st.cache_data(ttl=3600)
-def load_hourly_data(db_path):
+def load_hourly_data(db_path, region_type=None, customer_ids=None):
     conn = sqlite3.connect(db_path)
+    filter_sql, params = _sales_filter_clause(region_type, customer_ids)
     q = """
     SELECT 
         f.Hour,
@@ -178,12 +208,33 @@ def load_hourly_data(db_path):
         SUM(f.Quantity) AS Units,
         ROUND(SUM(f.TotalRevenue), 2) AS Revenue
     FROM Fact_Sales f
+    JOIN Dim_Location l ON f.LocationKey = l.LocationKey
+    JOIN Dim_Customer c ON f.CustomerKey = c.CustomerKey
+    WHERE 1 = 1
+    """ + filter_sql + """
     GROUP BY f.Hour
     ORDER BY f.Hour
     """
-    df = pd.read_sql_query(q, conn)
+    df = pd.read_sql_query(q, conn, params=params)
     conn.close()
     return df
+
+@st.cache_data(ttl=3600)
+def load_customer_ids_for_region(db_path, region_type):
+    conn = sqlite3.connect(db_path)
+    df = pd.read_sql_query(
+        """
+        SELECT DISTINCT c.CustomerID
+        FROM Fact_Sales f
+        JOIN Dim_Customer c ON f.CustomerKey = c.CustomerKey
+        JOIN Dim_Location l ON f.LocationKey = l.LocationKey
+        WHERE l.RegionType = ? AND c.CustomerID != -1
+        """,
+        conn,
+        params=(region_type,)
+    )
+    conn.close()
+    return set(df["CustomerID"].astype(int))
 
 @st.cache_data(ttl=3600)
 def load_rfm_data(rfm_path):
@@ -207,11 +258,7 @@ def load_dwh_row_counts(db_path):
     conn.close()
     return counts
 
-# Tải trước dữ liệu
-df_monthly = load_kpi_and_monthly(DB_PATH)
-df_country = load_country_data(DB_PATH)
-df_products = load_product_data(DB_PATH)
-df_hourly = load_hourly_data(DB_PATH)
+# Tải dữ liệu nguồn
 df_rfm = load_rfm_data(RFM_PATH)
 df_rules = load_basket_rules(RULES_PATH)
 dwh_row_counts = load_dwh_row_counts(DB_PATH)
@@ -230,6 +277,7 @@ with st.sidebar:
     # Lọc khu vực
     region_options = ["Tất cả khu vực", "Domestic (Vương quốc Anh)", "International (Quốc tế)"]
     selected_region = st.selectbox("Thị trường:", region_options)
+    st.caption("Thị trường lọc giao dịch theo quốc gia phát sinh trong kho.")
     
     # Lọc phân khúc RFM
     if not df_rfm.empty:
@@ -237,6 +285,7 @@ with st.sidebar:
         selected_segment = st.selectbox("Phân khúc RFM:", all_segments)
     else:
         selected_segment = "Tất cả"
+    st.caption("Phân khúc lọc giao dịch của khách thuộc nhóm RFM đã chọn.")
         
     st.markdown("---")
     st.markdown("#### 📊 **Thông Tin Kho Dữ Liệu**")
@@ -251,6 +300,32 @@ with st.sidebar:
     st.markdown("---")
     st.caption("Đồ án: Modern Data Lakehouse & Retail Analytics")
 
+region_type = {
+    "Tất cả khu vực": None,
+    "Domestic (Vương quốc Anh)": "Domestic",
+    "International (Quốc tế)": "International",
+}[selected_region]
+segment_customer_ids = None
+if selected_segment != "Tất cả":
+    segment_customer_ids = tuple(sorted(
+        int(customer_id)
+        for customer_id in df_rfm.loc[df_rfm["Segment"] == selected_segment, "CustomerID"].dropna()
+    ))
+
+df_monthly = load_kpi_and_monthly(DB_PATH, region_type, segment_customer_ids)
+df_country = load_country_data(DB_PATH, region_type, segment_customer_ids)
+df_products = load_product_data(DB_PATH, region_type, segment_customer_ids)
+df_hourly = load_hourly_data(DB_PATH, region_type, segment_customer_ids)
+
+df_rfm_analysis = df_rfm.copy()
+if selected_segment != "Tất cả":
+    df_rfm_analysis = df_rfm_analysis[df_rfm_analysis["Segment"] == selected_segment]
+if region_type:
+    regional_customer_ids = load_customer_ids_for_region(DB_PATH, region_type)
+    df_rfm_analysis = df_rfm_analysis[
+        df_rfm_analysis["CustomerID"].astype(int).isin(regional_customer_ids)
+    ]
+
 # ------------------------------------------------------------------------------
 # 4. TIÊU ĐỀ CHÍNH & TỔNG QUAN KPIS (EXECUTIVE OVERVIEW)
 # ------------------------------------------------------------------------------
@@ -261,10 +336,9 @@ st.markdown('<div class="sub-title">Hệ thống Kho Dữ Liệu Đa Chiều & P
 total_revenue = df_monthly['MonthlyRevenue'].sum()
 total_orders = df_monthly['TotalOrders'].sum()
 total_units = df_monthly['TotalUnitsSold'].sum()
-avg_aov = total_revenue / total_orders
-total_customers = df_country['Customers'].sum()
+avg_aov = total_revenue / total_orders if total_orders else 0
 repeat_customer_pct = (
-    (df_rfm['Frequency'] > 1).mean() * 100 if not df_rfm.empty else 0
+    (df_rfm_analysis['Frequency'] > 1).mean() * 100 if not df_rfm_analysis.empty else 0
 )
 
 # Hiển thị 4 thẻ KPI Card
@@ -273,16 +347,16 @@ kpi1, kpi2, kpi3, kpi4 = st.columns(4)
 with kpi1:
     st.markdown(f"""
     <div class="metric-card">
-        <div class="metric-label">Tổng Doanh Thu Toàn Hệ Thống</div>
+        <div class="metric-label">Doanh Thu Theo Bộ Lọc</div>
         <div class="metric-value">£{total_revenue:,.2f}</div>
-        <div class="metric-delta" style="color: #10B981;">▲ Tăng trưởng mạnh vào Q4/2011</div>
+        <div class="metric-delta" style="color: #10B981;">▲ Tổng doanh thu giao dịch phù hợp bộ lọc</div>
     </div>
     """, unsafe_allow_html=True)
 
 with kpi2:
     st.markdown(f"""
     <div class="metric-card">
-        <div class="metric-label">Tổng Số Đơn Hàng (Invoices)</div>
+        <div class="metric-label">Số Đơn Hàng Theo Bộ Lọc</div>
         <div class="metric-value">{total_orders:,}</div>
         <div class="metric-delta" style="color: #3B82F6;">● {total_units:,} sản phẩm bán ra</div>
     </div>
@@ -300,8 +374,8 @@ with kpi3:
 with kpi4:
     st.markdown(f"""
     <div class="metric-card">
-        <div class="metric-label">Khách Hàng Định Danh</div>
-        <div class="metric-value">{len(df_rfm):,}</div>
+        <div class="metric-label">Khách Định Danh Trong Phân Tích</div>
+        <div class="metric-value">{len(df_rfm_analysis):,}</div>
         <div class="metric-delta" style="color: #F59E0B;">★ {repeat_customer_pct:.2f}% khách quay lại mua</div>
     </div>
     """, unsafe_allow_html=True)
@@ -319,6 +393,18 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
     "🏗️ Kiến Trúc Kho Dữ Liệu (Star Schema)",
     "💱 Tỷ Giá & Quy Đổi Doanh Thu (API)"
 ])
+
+active_filters = []
+if selected_region != "Tất cả khu vực":
+    active_filters.append(selected_region)
+if selected_segment != "Tất cả":
+    active_filters.append(selected_segment)
+st.caption(
+    "Phạm vi đang xem: " + (" • ".join(active_filters) if active_filters else "Toàn bộ dữ liệu")
+    + ". Luật Apriori và nhãn K-Means là kết quả đã tính trước; bộ lọc không chạy lại mô hình."
+)
+if df_monthly.empty:
+    st.warning("Không có giao dịch phù hợp với bộ lọc hiện tại.")
 
 # ==============================================================================
 # TAB 1: XU HƯỚNG DOANH THU & THỜI GIAN
@@ -385,18 +471,31 @@ with tab1:
         st.plotly_chart(fig_hour, use_container_width=True)
         
     with col_h2:
-        st.info("""
+        peak_hours = df_hourly[df_hourly["Hour"].between(10, 15)]
+        peak_share = (
+            peak_hours["Orders"].sum() / df_hourly["Orders"].sum() * 100
+            if not df_hourly.empty and df_hourly["Orders"].sum() else 0
+        )
+        peak_hour = (
+            int(df_hourly.loc[df_hourly["Orders"].idxmax(), "Hour"])
+            if not df_hourly.empty else None
+        )
+        peak_hour_label = f"{peak_hour:02d}:00" if peak_hour is not None else "—"
+        peak_hour_orders = (
+            int(df_hourly["Orders"].max()) if not df_hourly.empty else 0
+        )
+        st.info(f"""
         **Chiến Lược Kinh Doanh Phù Hợp:**
-        - **Khung giờ vàng**: Từ **10:00 sáng đến 15:00 chiều** chiếm hơn **75%** lượng giao dịch toàn hệ thống.
-        - **Khung giờ cao điểm nhất**: **12:00 trưa** với 3,220 đơn hàng và doanh thu hơn 1.44 triệu GBP.
-        - **Đề xuất**: Phân bổ ngân sách quảng cáo Google Ads / Facebook Ads và gửi Email Marketing lúc 9:30 - 11:30 sáng để đón đầu nhu cầu mua sắm.
+        - **Khung giờ vàng**: Từ **10:00 đến 15:00** chiếm **{peak_share:.1f}%** số đơn trong phạm vi đang lọc.
+        - **Giờ cao điểm**: **{peak_hour_label}** với **{peak_hour_orders:,}** đơn hàng.
+        - **Đề xuất**: Cân nhắc tập trung quảng cáo và email trước khung giờ cao điểm của nhóm khách/thị trường đang xem.
         """)
 
 # ==============================================================================
 # TAB 2: ĐỊA LÝ & SẢN PHẨM CHỦ LỰC
 # ==============================================================================
 with tab2:
-    st.subheader("1. Cơ Cấu Thị Trường Địa Lý Toàn Cầu")
+    st.subheader("1. Cơ Cấu Thị Trường Địa Lý Theo Bộ Lọc")
     col_g1, col_g2 = st.columns([6, 4])
     
     with col_g1:
@@ -407,7 +506,7 @@ with tab2:
             x='Revenue',
             y='Country',
             orientation='h',
-            title="Top 10 Quốc Gia Đóng Góp Doanh Thu Cao Nhất",
+            title="Top 10 Quốc Gia Đóng Góp Doanh Thu Cao Nhất Theo Bộ Lọc",
             labels={'Revenue': 'Doanh thu (£ GBP)', 'Country': 'Quốc gia'},
             color='Revenue',
             color_continuous_scale='Blues'
@@ -471,12 +570,13 @@ with tab2:
 # ==============================================================================
 with tab3:
     st.subheader("1. Chân Dung & Phân Khúc Khách Hàng Theo Mô Hình RFM")
+    st.caption("RFM và biểu đồ khách hàng được giới hạn theo bộ lọc. Nhãn K-Means vẫn là nhãn đã tính trên toàn bộ tập khách hàng.")
     
-    if not df_rfm.empty:
+    if not df_rfm_analysis.empty:
         col_rfm1, col_rfm2 = st.columns([6, 4])
         
         with col_rfm1:
-            segment_counts = df_rfm.groupby('Segment').agg(
+            segment_counts = df_rfm_analysis.groupby('Segment').agg(
                 Khách_Hàng=('CustomerID', 'count'),
                 Doanh_Thu=('Monetary', 'sum'),
                 Recency_TB=('Recency', 'mean'),
@@ -513,7 +613,7 @@ with tab3:
         col_km1, col_km2 = st.columns([7, 3])
         with col_km1:
             fig_scatter = px.scatter(
-                df_rfm,
+                df_rfm_analysis,
                 x='Recency',
                 y='Monetary',
                 size='Frequency',
@@ -540,8 +640,8 @@ with tab3:
             )
 
         st.markdown("---")
-        st.subheader("3. Danh Sách Khách Hàng VIP Champions Cần Chăm Sóc Đặc Biệt")
-        champions_df = df_rfm[df_rfm['Segment'] == 'Champions (VIP)'].sort_values(by='Monetary', ascending=False)
+        st.subheader("3. Danh Sách Khách Hàng Theo Phân Khúc Đang Lọc")
+        champions_df = df_rfm_analysis.sort_values(by='Monetary', ascending=False)
         st.dataframe(
             champions_df[['CustomerCode', 'Country', 'Recency', 'Frequency', 'Monetary', 'KMeans_Label']].head(15).style.format({
                 'Monetary': '£{:,.2f}'
@@ -557,6 +657,7 @@ with tab3:
 with tab4:
     st.subheader("1. Công Cụ Gợi Ý Bán Kèm Sản Phẩm Thông Minh (Cross-sell Recommender)")
     st.write("Dựa trên thuật toán khai phá luật kết hợp **Apriori** từ hơn 18,000 giỏ hàng.")
+    st.caption("Các luật Apriori được khai phá trước trên toàn bộ dữ liệu, không được tính lại theo bộ lọc thị trường hoặc RFM.")
     
     if not df_rules.empty:
         # Lấy danh sách các sản phẩm tiền đề (Antecedents)
@@ -705,13 +806,13 @@ with tab6:
         total_rev = df_monthly['MonthlyRevenue'].sum()
         st.markdown(f"""
         <div class="metric-card" style="border-left: 4px solid #F59E0B;">
-            <div class="metric-label">Doanh Thu DWH Quy Đổi (Tỷ Giá Hôm Nay)</div>
+            <div class="metric-label">Doanh Thu Theo Bộ Lọc Quy Đổi (Tỷ Giá Hôm Nay)</div>
             <div style="display:flex; gap: 2rem; margin-top: 0.5rem;">
                 <span><b>GBP</b>: £ {total_rev:,.0f}</span>
                 <span><b>USD</b>: $ {total_rev * live_usd:,.0f}</span>
                 <span><b>EUR</b>: € {total_rev * live_eur:,.0f}</span>
             </div>
-            <div class="metric-delta" style="margin-top:0.3rem;">Tổng doanh thu 12/2010 – 12/2011</div>
+            <div class="metric-delta" style="margin-top:0.3rem;">Doanh thu giao dịch phù hợp bộ lọc hiện tại</div>
         </div>
         """, unsafe_allow_html=True)
 
