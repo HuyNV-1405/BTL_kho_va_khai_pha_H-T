@@ -10,6 +10,7 @@ Mô tả: Đường ống Lakehouse chính theo kiến trúc hiện đại:
 """
 
 import os
+import importlib.util
 import tempfile
 import time
 import s3fs
@@ -20,6 +21,8 @@ from sqlalchemy import create_engine, text
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_RAW_CSV = os.path.join(BASE_DIR, "data", "raw", "data.csv")
 DATA_CLEAN_CSV = os.path.join(BASE_DIR, "data", "processed", "data_cleaned.csv")
+DATA_REJECTED_CSV = os.path.join(BASE_DIR, "data", "processed", "data_rejected.csv")
+CLEANING_AUDIT_CSV = os.path.join(BASE_DIR, "outputs", "data_cleaning_audit.csv")
 
 CFG = {
     "s3_endpoint": "localhost:9000",
@@ -74,11 +77,30 @@ def run_lakehouse_pipeline():
     fs.put(DATA_RAW_CSV, raw_s3_path)
     print(f"     ✅ Hoàn tất upload Raw Data ({os.path.getsize(DATA_RAW_CSV)/(1024*1024):.2f} MB)")
 
+    # Làm sạch bản raw đã lưu trong MinIO, không đọc trực tiếp bản local.
+    print("  -> Đang đọc dữ liệu raw từ MinIO để khám phá và làm sạch...")
+    raw_tmp = tempfile.NamedTemporaryFile(suffix=".csv", delete=False)
+    raw_tmp.close()
+    try:
+        fs.get(raw_s3_path, raw_tmp.name)
+        cleaning_script = os.path.join(BASE_DIR, "scripts", "01_eda_and_cleaning.py")
+        spec = importlib.util.spec_from_file_location("eda_and_cleaning", cleaning_script)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"Không thể nạp script làm sạch: {cleaning_script}")
+        cleaning_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cleaning_module)
+        cleaning_module.run_eda_and_cleaning(
+            input_file=raw_tmp.name,
+            output_clean=DATA_CLEAN_CSV,
+            output_rejected=DATA_REJECTED_CSV,
+            output_audit=CLEANING_AUDIT_CSV
+        )
+    finally:
+        os.unlink(raw_tmp.name)
+
     # 2.2 Tầng Staging: Chuyển dữ liệu sạch sang định dạng Parquet tối ưu nén
     staging_s3_path = "staging/online_retail/data_cleaned.parquet"
     print(f"  -> Đang chuyển đổi sang Parquet và đẩy lên MinIO '{staging_s3_path}'...")
-    if not os.path.exists(DATA_CLEAN_CSV):
-        raise FileNotFoundError(f"Không tìm thấy dữ liệu đã làm sạch: {DATA_CLEAN_CSV}")
     df_clean = pd.read_csv(DATA_CLEAN_CSV, dtype={'InvoiceNo': str}, low_memory=False)
     with fs.open(staging_s3_path, 'wb') as f:
         df_clean.to_parquet(f, index=False, engine='pyarrow', compression='snappy')

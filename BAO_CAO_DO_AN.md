@@ -174,7 +174,8 @@ Tài liệu thiết kế: `database/02_data_modeling.md` | DDL Schema: `database
 Script thực hiện: `scripts/06_lakehouse_minio_postgres_etl.py`.
 
 ### 4.1. Quy trình Lakehouse ETL
-- **Raw**: Đưa CSV nguồn và snapshot API lên bucket `raw` của MinIO.
+- **Raw**: Đưa CSV nguồn và snapshot API lên bucket `raw` của MinIO trước khi xử lý dữ liệu.
+- **EDA & Cleaning**: Đọc lại CSV raw từ MinIO, chạy `scripts/01_eda_and_cleaning.py`; lưu bản sạch, bản bị loại và audit cục bộ để kiểm tra/đối soát.
 - **Staging**: Chuyển dữ liệu sạch thành Parquet, lưu tại `staging`.
 - **Curated**: Dùng DuckDB đọc lại Parquet staging, tạo các bảng Star Schema dạng Parquet và lưu tại `curated`.
 - **Load**: Đọc lại các object curated từ MinIO rồi nạp theo lô, trong một transaction, vào PostgreSQL DWH.

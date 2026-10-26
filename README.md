@@ -7,17 +7,14 @@ Dự án nghiên cứu, thiết kế và hiện thực hóa kiến trúc **Hồ 
 ## 🌟 LUỒNG CHÍNH LAKEHOUSE (SYSTEM ARCHITECTURE)
 
 ```
-[ data/raw/data.csv ] -> [ EDA & Cleaning ] -> [ MinIO Lakehouse ]
-                                                    raw
-                                                     ↓
-                                                  staging
-                                                     ↓
-                                                  curated
-                                                     ↓
-                                      [ PostgreSQL Star Schema DWH ]
-                                           ┌─────────┴─────────┐
-                                           ▼                   ▼
-                                     [ OLAP & Mining ]   [ Dashboards ]
+[ data/raw/data.csv ] -> [ MinIO raw ] -> [ EDA & Cleaning ] -> [ MinIO staging ]
+                                                                    ↓
+                                                                curated
+                                                                    ↓
+                                                  [ PostgreSQL Star Schema DWH ]
+                                                       ┌────────────┴──────────┐
+                                                       ▼                       ▼
+                                                 [ OLAP & Mining ]       [ Dashboards ]
 
 SQLite là phương án local/dự phòng; không nằm trong luồng triển khai chính.
 ```
@@ -91,21 +88,17 @@ E:\ổ D\Kho\B\
    ```bash
    docker compose up -d
    ```
-2. **Làm sạch dữ liệu nguồn**:
-   ```bash
-   python scripts\01_eda_and_cleaning.py
-   ```
-3. **Chạy ETL chính qua MinIO rồi nạp curated vào PostgreSQL**:
+2. **Chạy ETL chính** — pipeline đưa dữ liệu gốc lên MinIO trước, sau đó đọc bản raw từ MinIO để làm sạch, tạo staging/curated và nạp vào PostgreSQL:
    ```bash
    python scripts\06_lakehouse_minio_postgres_etl.py
    ```
-4. **Kiểm thử DWH, sau đó chạy OLAP và khai phá**:
+3. **Kiểm thử DWH, sau đó chạy OLAP và khai phá**:
    ```bash
    python scripts\03b_dwh_test_reconciliation.py
    python scripts\04_run_olap_queries.py
    python scripts\05_data_mining.py
    ```
-5. **Mở Web Dashboard tương tác (Streamlit)**:
+4. **Mở Web Dashboard tương tác (Streamlit)**:
    ```bash
    python -m streamlit run app.py
    ```
@@ -154,7 +147,6 @@ Nếu chưa có thư mục `data\raw`, hãy tạo thư mục đó trước khi c
 Chạy các lệnh từ thư mục gốc dự án, sau khi đã kích hoạt môi trường Python:
 
 ```powershell
-python scripts\01_eda_and_cleaning.py
 python scripts\07_api_enrichment.py
 docker compose up -d minio minio-init postgres
 python scripts\06_lakehouse_minio_postgres_etl.py
@@ -163,9 +155,12 @@ python scripts\04_run_olap_queries.py
 python scripts\05_data_mining.py
 ```
 
-Dữ liệu phải đi từ làm sạch qua MinIO raw/staging/curated rồi mới được nạp vào PostgreSQL.
-Script 07 là tùy chọn nếu cần bổ sung dữ liệu tỷ giá; khi chạy, nó chỉ lưu snapshot và CSV
-để script 06 ingest vào Lakehouse.
+Script 06 đưa CSV gốc lên MinIO raw trước, tải bản raw đó để chạy EDA/làm sạch,
+sau đó ghi dữ liệu sạch vào staging, tạo curated và nạp PostgreSQL. Các file CSV sạch,
+bị loại và báo cáo audit vẫn được lưu cục bộ trong `data\processed` và `outputs`.
+Script 01 có thể chạy độc lập để khảo sát/làm sạch thủ công, nhưng không cần chạy trước
+pipeline chính. Script 07 là tùy chọn nếu cần bổ sung dữ liệu tỷ giá; nó lưu snapshot và
+CSV để script 06 ingest vào Lakehouse.
 Chỉ chạy kiểm thử, OLAP, khai phá và dashboard sau khi pipeline Lakehouse hoàn tất.
 
 ### 5. Chạy Dashboard

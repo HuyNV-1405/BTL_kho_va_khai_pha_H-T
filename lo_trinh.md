@@ -63,10 +63,10 @@
 ---
 
 ### GIAI ĐOẠN 3: LAKEHOUSE VÀ ĐƯỜNG ỐNG ETL
-**Mục tiêu**: Đưa dữ liệu qua MinIO raw → staging → curated rồi nạp Star Schema curated vào PostgreSQL trước mọi phân tích tiếp theo.
+**Mục tiêu**: Đưa CSV gốc vào MinIO raw trước, làm sạch từ bản raw đó, ghi staging → curated rồi nạp Star Schema curated vào PostgreSQL trước mọi phân tích tiếp theo.
 
-- [x] **Bước 3.1**: Đưa CSV nguồn lên bucket `raw` của MinIO.
-- [x] **Bước 3.2**: Đưa dữ liệu đã làm sạch thành Parquet vào bucket `staging`.
+- [x] **Bước 3.1**: Đưa CSV nguồn lên bucket `raw` của MinIO trước khi làm sạch.
+- [x] **Bước 3.2**: Đọc CSV từ MinIO raw, chạy EDA/làm sạch; lưu dữ liệu sạch thành Parquet vào bucket `staging`.
 - [x] **Bước 3.3**: Dùng DuckDB đọc lại staging, tạo Parquet Star Schema và lưu vào `curated`.
 - [x] **Bước 3.4**: Nạp các bảng curated đọc lại từ MinIO vào PostgreSQL theo transaction, sau đó đối soát số dòng và doanh thu.
 - [x] **Phương án dự phòng**: Giữ `03_etl_pipeline.py` để nạp riêng vào SQLite khi chạy local; không dùng thay cho luồng Lakehouse chính.
