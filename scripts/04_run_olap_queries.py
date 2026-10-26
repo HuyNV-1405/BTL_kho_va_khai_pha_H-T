@@ -202,52 +202,7 @@ def run_olap_analysis(database_url=None):
     print(df_q6.to_string(index=False))
 
     # -------------------------------------------------------------------------
-    # BÀI TOÁN 7: TOP 10 KHÁCH HÀNG VIP
-    # -------------------------------------------------------------------------
-    print("\n\n[BÀI TOÁN 7] TOP 10 KHÁCH HÀNG VIP ĐÓNG GÓP DOANH THU CAO NHẤT")
-    print("-" * 80)
-    q7 = """
-    SELECT 
-        c.CustomerID, c.CustomerCode, c.Country,
-        COUNT(DISTINCT f.InvoiceNo) AS TotalOrders,
-        SUM(f.Quantity) AS TotalUnitsBought,
-        ROUND(SUM(f.TotalRevenue), 2) AS TotalSpent,
-        ROUND(SUM(f.TotalRevenue) / COUNT(DISTINCT f.InvoiceNo), 2) AS AvgOrderValue,
-        DENSE_RANK() OVER (ORDER BY SUM(f.TotalRevenue) DESC) AS SpendingRank
-    FROM Fact_Sales f
-    JOIN Dim_Customer c ON f.CustomerKey = c.CustomerKey
-    WHERE c.IsGuestCustomer = 0
-    GROUP BY c.CustomerID, c.CustomerCode, c.Country
-    ORDER BY TotalSpent DESC
-    LIMIT 10;
-    """
-    with engine.connect() as conn:
-        df_q7 = pd.read_sql_query(text(q7), conn)
-    print(df_q7.to_string(index=False))
-
-    # -------------------------------------------------------------------------
-    # BÀI TOÁN 8: PHÂN TÍCH ĐA TIỀN TỆ (MULTI-CURRENCY REVENUE - FRANKFURTER API / ECB)
-    # -------------------------------------------------------------------------
-    print("\n\n[BÀI TOÁN 8] DOANH THU QUY ĐỔI ĐA TIỀN TỆ (GBP / USD / EUR) THEO THÁNG")
-    print("-" * 80)
-    q8 = """
-    SELECT
-        d.YearMonth                                          AS YearMonth,
-        COUNT(DISTINCT f.InvoiceNo)                          AS Orders,
-        ROUND(SUM(f.TotalRevenue), 2)                        AS Revenue_GBP,
-        c.USD_Rate                                           AS FX_USD,
-        c.EUR_Rate                                           AS FX_EUR,
-        ROUND(SUM(f.TotalRevenue) * c.USD_Rate, 2)           AS Revenue_USD,
-        ROUND(SUM(f.TotalRevenue) * c.EUR_Rate, 2)           AS Revenue_EUR
-    FROM   Fact_Sales f
-    JOIN   Dim_Date d      ON f.DateKey    = d.DateKey
-    LEFT JOIN Dim_Currency c ON d.Year = c.Year AND d.Month = c.Month
-    GROUP  BY d.YearMonth, c.USD_Rate, c.EUR_Rate
-    ORDER  BY d.YearMonth;
-    """
-    with engine.connect() as conn:
-        df_q8 = pd.read_sql_query(text(q8), conn)
-    print(df_q8.to_string(index=False))
+   
 
     # -------------------------------------------------------------------------
     # BÀI TOÁN 9: BIẾN ĐỘNG TỶ GIÁ THÁNG QUA THÁNG (MOM FX DELTA)
