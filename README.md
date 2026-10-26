@@ -61,6 +61,8 @@ E:\ổ D\Kho\B\
 │   └── market_basket_rules.csv     # 992 luật kết hợp gợi ý bán chéo (Apriori)
 │
 ├── app.py                      # Ứng dụng Web Dashboard tương tác (Streamlit)
+├── notebooks/                  # Notebook thử nghiệm và phân tích tương tác
+│   └── kmeans_k_experiment.ipynb # Thử nhiều giá trị K cho phân cụm khách hàng
 ├── BAO_CAO_DO_AN.md            # Báo cáo tổng kết đồ án chi tiết (Word/Markdown)
 ├── lo_trinh.md                 # Lộ trình tổng thể và trạng thái hoàn thành từng giai đoạn
 ├── yeu_cau.md                  # Đề bài gốc ban đầu
@@ -102,6 +104,14 @@ E:\ổ D\Kho\B\
    ```bash
    python -m streamlit run app.py
    ```
+
+### Thử nghiệm nhiều giá trị K bằng Jupyter Notebook
+
+Sau khi PostgreSQL đã được nạp dữ liệu, cài thư viện từ `requirements.txt`, mở
+`notebooks\kmeans_k_experiment.ipynb` trong VS Code và chạy lần lượt các cell. Notebook
+đọc RFM từ PostgreSQL, thử các giá trị K có thể chỉnh ở biến `K_MIN`/`K_MAX`, so sánh
+Inertia (Elbow) và Silhouette, rồi hiển thị đặc điểm từng cụm. Kết quả thử nghiệm không
+ghi đè đầu ra hay thay đổi pipeline chính.
 
 ---
 
