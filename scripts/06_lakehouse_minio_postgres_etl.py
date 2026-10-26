@@ -338,6 +338,19 @@ def run_lakehouse_pipeline():
     
         print(f"  -> Đang nạp fact_sales ({len(fact_sales):,} dòng) vào PostgreSQL...")
         fact_sales.to_sql('fact_sales', con, if_exists='append', index=False, chunksize=20000)
+
+        aggregate_sql_path = os.path.join(BASE_DIR, "sql", "05_olap_aggregate_cubes.sql")
+        with open(aggregate_sql_path, encoding="utf-8") as aggregate_sql_file:
+            for statement in aggregate_sql_file.read().split(";"):
+                if statement.strip():
+                    con.execute(text(statement))
+        for view_name in (
+            "mv_olap_monthly_sales",
+            "mv_olap_monthly_country_sales",
+            "mv_olap_monthly_product_sales",
+        ):
+            con.execute(text(f"REFRESH MATERIALIZED VIEW {view_name}"))
+        print("  -> Đã cập nhật 3 khối tổng hợp OLAP (tháng, quốc gia, sản phẩm).")
     print("  -> Đã khởi tạo schema và nạp dữ liệu curated vào PostgreSQL DWH.")
     load_duration = time.time() - load_start
     print(f"     ✅ Nạp thành công vào PostgreSQL trong {load_duration:.2f} giây!")

@@ -8,7 +8,8 @@ Mô tả: Bộ kiểm thử và đối soát toàn diện Kho Dữ Liệu (DWH A
        5. Kiểm tra tuân thủ các quy tắc nghiệp vụ (không có đơn hủy, không có số lượng/đơn giá <= 0).
        6. Đối soát khách vãng lai (Guest Customer Mapping).
        7. Kiểm tra đối chiếu trên các lát cắt phân tích (Slice & Dice Spot-checks: UK, Tháng 11/2011, Top SKU).
-       8. Xuất báo cáo kiểm thử nghiệm thu (PASS/FAIL) ra file outputs/dwh_test_reconciliation_report.csv.
+       8. Đối soát doanh thu các khối tổng hợp OLAP trên PostgreSQL.
+       9. Xuất báo cáo kiểm thử nghiệm thu (PASS/FAIL) ra file outputs/dwh_test_reconciliation_report.csv.
 """
 
 import os
@@ -82,7 +83,7 @@ def run_dwh_test_suite(db_path=None, clean_csv=None, output_report=None, verbose
     # --------------------------------------------------------------------------
     # NHÓM 1: ĐỐI CHIẾU SỐ LƯỢNG DÒNG (ROW COUNT RECONCILIATION)
     # --------------------------------------------------------------------------
-    print("\n[PHẦN 1/6] ĐỐI CHIẾU SỐ DÒNG CÁC BẢNG (ROW COUNT RECONCILIATION)")
+    print("\n[PHẦN 1/7] ĐỐI CHIẾU SỐ DÒNG CÁC BẢNG (ROW COUNT RECONCILIATION)")
     print("-" * 80)
 
     # 1.1 Fact_Sales Row Count
@@ -143,7 +144,7 @@ def run_dwh_test_suite(db_path=None, clean_csv=None, output_report=None, verbose
     # --------------------------------------------------------------------------
     # NHÓM 2: ĐỐI CHIẾU ĐỘ ĐO TÀI CHÍNH & SẢN LƯỢNG (MEASURES RECONCILIATION)
     # --------------------------------------------------------------------------
-    print("\n[PHẦN 2/6] ĐỐI CHIẾU ĐỘ ĐO SẢN LƯỢNG & DOANH THU (MEASURES RECONCILIATION)")
+    print("\n[PHẦN 2/7] ĐỐI CHIẾU ĐỘ ĐO SẢN LƯỢNG & DOANH THU (MEASURES RECONCILIATION)")
     print("-" * 80)
 
     # 2.1 Total Quantity
@@ -172,7 +173,7 @@ def run_dwh_test_suite(db_path=None, clean_csv=None, output_report=None, verbose
     # --------------------------------------------------------------------------
     # NHÓM 3: TÍNH TOÀN VẸN THAM CHIẾU & RÀNG BUỘC KHÓA (REFERENTIAL INTEGRITY)
     # --------------------------------------------------------------------------
-    print("\n[PHẦN 3/6] KIỂM TRA RÀNG BUỘC KHÓA NGOẠI (REFERENTIAL INTEGRITY & NULL CHECKS)")
+    print("\n[PHẦN 3/7] KIỂM TRA RÀNG BUỘC KHÓA NGOẠI (REFERENTIAL INTEGRITY & NULL CHECKS)")
     print("-" * 80)
 
     orphan_queries = [
@@ -209,7 +210,7 @@ def run_dwh_test_suite(db_path=None, clean_csv=None, output_report=None, verbose
     # --------------------------------------------------------------------------
     # NHÓM 4: KIỂM TRA TUÂN THỦ QUY TẮC NGHIỆP VỤ (BUSINESS RULES INTEGRITY)
     # --------------------------------------------------------------------------
-    print("\n[PHẦN 4/6] KIỂM TRA TUÂN THỦ QUY TẮC NGHIỆP VỤ SAU ETL (BUSINESS RULES)")
+    print("\n[PHẦN 4/7] KIỂM TRA TUÂN THỦ QUY TẮC NGHIỆP VỤ SAU ETL (BUSINESS RULES)")
     print("-" * 80)
 
     # 4.1 Không có đơn hủy trong Fact_Sales
@@ -267,7 +268,7 @@ def run_dwh_test_suite(db_path=None, clean_csv=None, output_report=None, verbose
     # --------------------------------------------------------------------------
     # NHÓM 5: ĐỐI SOÁT TRÊN CÁC LÁT CẮT NGHIỆP VỤ (SLICE & DICE SPOT-CHECKS)
     # --------------------------------------------------------------------------
-    print("\n[PHẦN 5/6] KIỂM TRA ĐỐI CHIẾU TRÊN CÁC LÁT CẮT NGHIỆP VỤ (SLICE & DICE SPOT-CHECKS)")
+    print("\n[PHẦN 5/7] KIỂM TRA ĐỐI CHIẾU TRÊN CÁC LÁT CẮT NGHIỆP VỤ (SLICE & DICE SPOT-CHECKS)")
     print("-" * 80)
 
     # 5.1 Lát cắt Thị trường nội địa: United Kingdom
@@ -318,7 +319,7 @@ def run_dwh_test_suite(db_path=None, clean_csv=None, output_report=None, verbose
     # --------------------------------------------------------------------------
     # NHÓM 6: KIỂM TRA TÍNH ĐƠN NHẤT CỦA KHÓA (KEY UNIQUENESS)
     # --------------------------------------------------------------------------
-    print("\n[PHẦN 6/6] KIỂM TRA TÍNH ĐƠN NHẤT CỦA KHÓA (KEY UNIQUENESS)")
+    print("\n[PHẦN 6/7] KIỂM TRA TÍNH ĐƠN NHẤT CỦA KHÓA (KEY UNIQUENESS)")
     print("-" * 80)
 
     # 6.1 Khóa chính Fact_Sales đơn nhất (không bị duplicate dòng khi nạp)
@@ -350,6 +351,32 @@ def run_dwh_test_suite(db_path=None, clean_csv=None, output_report=None, verbose
             dup_cnt == 0
         )
         test_counter += 1
+
+    if engine.url.get_backend_name() == "postgresql":
+        print("\n[PHẦN 7/7] ĐỐI SOÁT CÁC KHỐI TỔNG HỢP OLAP")
+        for view_name in (
+            "mv_olap_monthly_sales",
+            "mv_olap_monthly_country_sales",
+            "mv_olap_monthly_product_sales",
+        ):
+            cube_revenue = cursor.execute(
+                f"SELECT COALESCE(SUM(revenue_gbp), 0) FROM {view_name}"
+            ).fetchone()[0]
+            fact_revenue = cursor.execute(
+                "SELECT COALESCE(SUM(TotalRevenue), 0) FROM Fact_Sales"
+            ).fetchone()[0]
+            difference = abs(float(cube_revenue) - float(fact_revenue))
+            record_test(
+                f"TC{test_counter:02d}",
+                "Aggregate Reconciliation",
+                f"Đối soát doanh thu {view_name} với Fact_Sales",
+                f"{float(fact_revenue):,.2f} GBP",
+                f"{float(cube_revenue):,.2f} GBP",
+                f"{difference:.2f} GBP",
+                "Difference <= 0.01 GBP",
+                difference <= 0.01,
+            )
+            test_counter += 1
 
     conn.close()
 

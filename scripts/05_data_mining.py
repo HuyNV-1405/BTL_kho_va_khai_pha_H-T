@@ -9,6 +9,7 @@ import os
 import sys
 import numpy as np
 import pandas as pd
+from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
@@ -116,37 +117,81 @@ def rfm_segmentation_and_clustering(conn, output_csv):
 
     # 6. Gom cụm K-Means Clustering
     print("\nTiến hành gom cụm không giám sát K-Means Clustering...")
-    # Log transformation xử lý lệch phải (skewness)
-    rfm_log = pd.DataFrame()
-    rfm_log['Recency'] = np.log1p(rfm['Recency'])
-    rfm_log['Frequency'] = np.log1p(rfm['Frequency'])
-    rfm_log['Monetary'] = np.log1p(rfm['Monetary'].clip(lower=0))
+    # Hold out customers before fitting transforms or selecting K.
+    rfm_values = rfm[['Recency', 'Frequency', 'Monetary']].clip(lower=0).to_numpy()
+    train_indices, test_indices = train_test_split(
+        np.arange(len(rfm_values)), test_size=0.2, random_state=42
+    )
+    rfm_log = np.log1p(rfm_values)
+    log_scaler = StandardScaler().fit(rfm_log[train_indices])
+    rfm_scaled = log_scaler.transform(rfm_log)
+    train_scaled = rfm_scaled[train_indices]
+    test_scaled = rfm_scaled[test_indices]
 
-    scaler = StandardScaler()
-    rfm_scaled = scaler.fit_transform(rfm_log)
-
-    # 6.1 Elbow Method (WCSS / Inertia) + Silhouette Score cho k = 2 → 8
+    # 6.1 Select K on training customers and evaluate on a held-out set.
     k_range = range(2, 9)
     wcss_values = []
-    silhouette_values = []
-    print("\n  Phân tích Elbow Method (WCSS) & Silhouette Score cho k = 2 → 8:")
-    print(f"  {'k':>3} | {'WCSS (Inertia)':>16} | {'Silhouette Score':>18}")
-    print("  " + "-" * 45)
+    train_silhouette_values = []
+    evaluation_rows = []
+    print("\n  Chọn K trên train và đánh giá Silhouette trên holdout (20% khách hàng):")
+    print(f"  {'k':>3} | {'Train Inertia':>16} | {'Train Silhouette':>18} | {'Test Silhouette':>17}")
+    print("  " + "-" * 65)
     for k in k_range:
         km_test = KMeans(n_clusters=k, random_state=42, n_init=10)
-        labels = km_test.fit_predict(rfm_scaled)
+        train_labels = km_test.fit_predict(train_scaled)
+        test_labels = km_test.predict(test_scaled)
         wcss = km_test.inertia_
-        sil = silhouette_score(rfm_scaled, labels)
+        train_sil = silhouette_score(train_scaled, train_labels)
+        test_sil = silhouette_score(test_scaled, test_labels)
         wcss_values.append(wcss)
-        silhouette_values.append(sil)
-        print(f"  {k:>3} | {wcss:>16,.2f} | {sil:>18.4f}")
+        train_silhouette_values.append(train_sil)
+        evaluation_rows.append({
+            "Model": "KMeans_log1p",
+            "K": k,
+            "Train_Silhouette": train_sil,
+            "Test_Silhouette": test_sil,
+        })
+        print(f"  {k:>3} | {wcss:>16,.2f} | {train_sil:>18.4f} | {test_sil:>17.4f}")
 
-    # Xác định số cụm theo Silhouette; giữ k=4 nếu gần bằng nghiệm tốt nhất.
-    best_k = list(k_range)[np.argmax(silhouette_values)]
-    best_sil = max(silhouette_values)
+    # Dùng Silhouette trên cùng không gian log-RFM để so sánh baseline công bằng.
+    raw_scaler = StandardScaler().fit(rfm_values[train_indices])
+    raw_train_scaled = raw_scaler.transform(rfm_values[train_indices])
+    raw_test_scaled = raw_scaler.transform(rfm_values[test_indices])
+    baseline = KMeans(n_clusters=2, random_state=42, n_init=10).fit(raw_train_scaled)
+    baseline_train_labels = baseline.labels_
+    baseline_test_labels = baseline.predict(raw_test_scaled)
+    evaluation_rows.append({
+        "Model": "Baseline_KMeans_raw_RFM",
+        "K": 2,
+        "Train_Silhouette": silhouette_score(train_scaled, baseline_train_labels),
+        "Test_Silhouette": silhouette_score(test_scaled, baseline_test_labels),
+    })
+    evaluation_path = os.path.join(OUTPUTS_DIR, "kmeans_holdout_evaluation.csv")
+    pd.DataFrame(evaluation_rows).to_csv(evaluation_path, index=False)
+    print(f"\n  Baseline K-Means không log-transform, K=2; đánh giá trong không gian log-RFM chung.")
+    print(f"  -> Đã lưu kết quả holdout: '{evaluation_path}'")
+
+    # Chọn K=2..8 trong họ log-RFM; chỉ dùng score train.
+    best_k = list(k_range)[np.argmax(train_silhouette_values)]
+    best_sil = max(train_silhouette_values)
     k4_index = 4 - k_range.start
-    if silhouette_values[k4_index] >= best_sil * 0.95:
+    if train_silhouette_values[k4_index] >= best_sil * 0.95:
         best_k = 4
+    selected_model = "KMeans_log1p"
+    selected_train_silhouette = train_silhouette_values[best_k - 2]
+
+    baseline_train_silhouette = evaluation_rows[-1]["Train_Silhouette"]
+    if baseline_train_silhouette > selected_train_silhouette:
+        selected_model = "Baseline_KMeans_raw_RFM"
+        best_k = 2
+        selected_train_silhouette = baseline_train_silhouette
+        rfm_scaled = StandardScaler().fit_transform(rfm_values)
+    else:
+        rfm_scaled = StandardScaler().fit_transform(rfm_log)
+    selected_row = next(
+        row for row in evaluation_rows
+        if row["Model"] == selected_model and row["K"] == best_k
+    )
 
     # Vẽ biểu đồ Elbow + Silhouette (kép trên 1 figure)
     import matplotlib
@@ -157,19 +202,30 @@ def rfm_segmentation_and_clustering(conn, output_csv):
 
     # Elbow chart
     ax1.plot(list(k_range), wcss_values, 'bo-', linewidth=2, markersize=8)
-    ax1.axvline(x=best_k, color='red', linestyle='--', alpha=0.7, label=f'k = {best_k} (Selected)')
+    ax1.axvline(
+        x=best_k, color='red', linestyle='--', alpha=0.7,
+        label=f'k = {best_k} ({selected_model})'
+    )
     ax1.set_xlabel('Số cụm (k)', fontsize=12)
     ax1.set_ylabel('WCSS (Inertia)', fontsize=12)
-    ax1.set_title('Elbow Method — Chọn số cụm tối ưu', fontsize=13, fontweight='bold')
+    ax1.set_title('Elbow Method — K-Means log-RFM', fontsize=13, fontweight='bold')
     ax1.legend(fontsize=10)
     ax1.grid(True, alpha=0.3)
 
     # Silhouette chart
-    ax2.plot(list(k_range), silhouette_values, 'gs-', linewidth=2, markersize=8)
-    ax2.axvline(x=best_k, color='red', linestyle='--', alpha=0.7, label=f'k = {best_k} (Selected)')
+    ax2.plot(list(k_range), train_silhouette_values, 'gs-', linewidth=2, markersize=8)
+    if selected_model == "Baseline_KMeans_raw_RFM":
+        ax2.scatter(
+            [best_k], [selected_train_silhouette], color='purple', marker='D',
+            label='Baseline raw RFM (cùng không gian đánh giá)'
+        )
+    ax2.axvline(
+        x=best_k, color='red', linestyle='--', alpha=0.7,
+        label=f'k = {best_k} ({selected_model})'
+    )
     ax2.set_xlabel('Số cụm (k)', fontsize=12)
     ax2.set_ylabel('Silhouette Score', fontsize=12)
-    ax2.set_title('Silhouette Analysis — Đánh giá chất lượng cụm', fontsize=13, fontweight='bold')
+    ax2.set_title('Silhouette trên tập train — chọn K', fontsize=13, fontweight='bold')
     ax2.legend(fontsize=10)
     ax2.grid(True, alpha=0.3)
 
@@ -179,7 +235,11 @@ def rfm_segmentation_and_clustering(conn, output_csv):
     plt.close()
     print(f"\n  📊 Đã lưu biểu đồ Elbow & Silhouette vào: '{elbow_chart_path}'")
 
-    print(f"  → Số cụm được chọn: k = {best_k} (Silhouette = {silhouette_values[best_k - 2]:.4f})")
+    print(
+        f"  → Mô hình được chọn trên train: {selected_model}, k = {best_k} "
+        f"(Train Silhouette = {selected_train_silhouette:.4f}, "
+        f"Test Silhouette = {selected_row['Test_Silhouette']:.4f})"
+    )
 
     # 6.2 Kiểm tra độ ổn định cụm (Cluster Stability) qua nhiều random seeds
     print(f"\n  Kiểm tra độ ổn định cụm K-Means (Stability Test, k={best_k}, 5 seeds):")

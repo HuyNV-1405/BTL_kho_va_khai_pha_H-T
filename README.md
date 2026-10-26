@@ -54,7 +54,8 @@ E:\ổ D\Kho\B\
 │
 ├── sql/                        # Kịch bản SQL phân tích
 │   ├── 02_schema_ddl.sql       # DDL tạo Schema
-│   └── 04_olap_queries.sql     # 8 bài toán truy vấn OLAP & SQL nâng cao
+│   ├── 04_olap_queries.sql     # Các truy vấn OLAP & SQL nâng cao
+│   └── 05_olap_aggregate_cubes.sql # Các khối tổng hợp vật lý cho PostgreSQL
 │
 ├── outputs/                    # Kết quả khai phá, dữ liệu tỷ giá và báo cáo audit/test
 │   ├── rfm_customer_segments.csv   # Kết quả phân khúc khách hàng RFM & K-Means
@@ -105,13 +106,55 @@ E:\ổ D\Kho\B\
    python -m streamlit run app.py
    ```
 
+### Khối tổng hợp và 5 thao tác OLAP
+
+ETL PostgreSQL tạo/làm mới ba materialized view theo tháng, quốc gia và sản phẩm.
+Sau khi chạy ETL, `python scripts\03b_dwh_test_reconciliation.py` đối soát doanh thu
+của từng khối với Fact; `python scripts\04_run_olap_queries.py` in ví dụ Slice, Dice,
+Drill-down, Roll-up và Pivot. Các view này thuộc PostgreSQL, không được tạo trong
+chế độ SQLite.
+
+### Đánh giá K-Means có holdout và baseline
+
+Script `scripts\05_data_mining.py` dùng train (80%) để chọn giữa K=2..8 của K-Means
+log-RFM và baseline K-Means RFM chưa log-transform; holdout (20%) chỉ dùng để báo
+Silhouette. CSV `outputs\kmeans_holdout_evaluation.csv` có các chỉ số train/test.
+Hai mô hình được đánh giá trong cùng không gian log-RFM chuẩn hóa. Mô hình có điểm
+Silhouette cao hơn không mặc nhiên có giá trị nghiệp vụ cao hơn; cần xem profile cụm.
+Clustering không có nhãn thật nên không dùng confusion matrix.
+
 ### Thử nghiệm nhiều giá trị K bằng Jupyter Notebook
 
 Sau khi PostgreSQL đã được nạp dữ liệu, cài thư viện từ `requirements.txt`, mở
 `notebooks\kmeans_k_experiment.ipynb` trong VS Code và chạy lần lượt các cell. Notebook
 đọc RFM từ PostgreSQL, thử các giá trị K có thể chỉnh ở biến `K_MIN`/`K_MAX`, so sánh
-Inertia (Elbow) và Silhouette, rồi hiển thị đặc điểm từng cụm. Kết quả thử nghiệm không
-ghi đè đầu ra hay thay đổi pipeline chính.
+Inertia (Elbow) và Silhouette, rồi hiển thị đặc điểm từng cụm. Sau khi chạy mục 4,
+notebook ghi kết quả lần chạy gần nhất vào bảng riêng
+`public.kmeans_k_experiment_results`; bảng này không làm thay đổi các bảng DWH hay
+đầu ra của pipeline chính.
+
+### Vẽ kết quả thử K trên Superset
+
+1. Khởi động Superset và PostgreSQL bằng `docker compose up -d postgres superset`.
+2. Chạy notebook đến hết mục 4 để tạo/cập nhật bảng
+   `public.kmeans_k_experiment_results`.
+3. Đăng nhập Superset tại `http://localhost:8088`. Dùng kết nối PostgreSQL có sẵn
+   nếu đã cấu hình; nếu chưa, thêm kết nối với URI
+   `postgresql+psycopg2://dataeng:dataeng123@postgres:5432/dwh`
+   (dùng host `postgres` vì Superset chạy trong Docker).
+4. Vào **Data → Datasets → + Dataset**, chọn database PostgreSQL, schema `public`,
+   bảng `kmeans_k_experiment_results`, rồi tạo dataset nếu chưa có.
+5. Tạo hai biểu đồ **Line Chart** từ dataset:
+   - **Elbow — Inertia theo K**: X-axis `K`, metric `Inertia_WCSS`.
+   - **Silhouette theo K**: X-axis `K`, metric `Silhouette`.
+6. Lưu cả hai biểu đồ. Muốn đặt cạnh nhau, tạo dashboard mới và thêm hai biểu đồ đó.
+
+Trong Superset hiện tại của dự án, hai biểu đồ đã được lưu trong dashboard
+**K-Means - Chon K** và publish tại `http://localhost:8088/superset/dashboard/1/`.
+Sau mỗi lần chạy lại notebook, làm mới dashboard để xem số liệu K mới nhất.
+Dashboard và charts hiện nằm trong Docker volume Superset, chưa được quản lý phiên
+bản cùng mã nguồn. Trên máy mới cần tạo lại Dataset/charts/dashboard theo các bước
+trên; dashboard không tự xuất hiện chỉ bằng `git clone` và `docker compose up`.
 
 ---
 

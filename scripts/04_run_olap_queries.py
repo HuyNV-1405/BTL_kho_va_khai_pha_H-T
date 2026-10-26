@@ -264,6 +264,60 @@ def run_olap_analysis(database_url=None):
         df_q9 = pd.read_sql_query(text(q9), conn)
     print(df_q9.to_string(index=False))
 
+    olap_demos = [
+        (
+            "SLICE",
+            "Chọn một lát dữ liệu: doanh thu theo tháng của năm 2011.",
+            """SELECT yearmonth, revenue_gbp
+               FROM mv_olap_monthly_sales
+               WHERE year = 2011
+               ORDER BY yearmonth
+               LIMIT 5""",
+        ),
+        (
+            "DICE",
+            "Chọn đồng thời nhiều chiều: UK/Đức trong quý 4 năm 2011.",
+            """SELECT yearmonth, country, revenue_gbp
+               FROM mv_olap_monthly_country_sales
+               WHERE year = 2011 AND quarter = 4
+                 AND country IN ('United Kingdom', 'Germany')
+               ORDER BY yearmonth, country""",
+        ),
+        (
+            "DRILL-DOWN",
+            "Đi từ tổng doanh thu năm xuống từng tháng trong năm.",
+            """SELECT yearmonth, revenue_gbp
+               FROM mv_olap_monthly_sales
+               WHERE year = 2011
+               ORDER BY yearmonth""",
+        ),
+        (
+            "ROLL-UP",
+            "Gộp dữ liệu tháng lên cấp quý.",
+            """SELECT year, quarter, SUM(revenue_gbp) AS revenue_gbp
+               FROM mv_olap_monthly_sales
+               GROUP BY year, quarter
+               ORDER BY year, quarter""",
+        ),
+        (
+            "PIVOT",
+            "Chuyển quốc gia thành cột để so sánh doanh thu theo tháng.",
+            """SELECT yearmonth,
+                      SUM(CASE WHEN country = 'United Kingdom' THEN revenue_gbp ELSE 0 END) AS uk_revenue,
+                      SUM(CASE WHEN country = 'Germany' THEN revenue_gbp ELSE 0 END) AS germany_revenue,
+                      SUM(CASE WHEN country = 'EIRE' THEN revenue_gbp ELSE 0 END) AS eire_revenue
+               FROM mv_olap_monthly_country_sales
+               GROUP BY yearmonth
+               ORDER BY yearmonth
+               LIMIT 5""",
+        ),
+    ]
+    print("\n\n[OLAP] MINH HỌA ĐỦ 5 THAO TÁC SLICE, DICE, DRILL-DOWN, ROLL-UP, PIVOT")
+    for operation, explanation, query in olap_demos:
+        print(f"\n[{operation}] {explanation}")
+        with engine.connect() as conn:
+            demo_result = pd.read_sql_query(text(query), conn)
+        print(demo_result.to_string(index=False))
 
     print("\n" + "=" * 80)
     print("HOÀN TẤT THỰC THI TRUY VẤN OLAP!")

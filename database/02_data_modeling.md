@@ -173,3 +173,18 @@ erDiagram
 3. **Chỉ mục hiệu năng cao (Performance Indexing)**:
    - Tạo Index trên toàn bộ các cột Foreign Key trong `Fact_Sales` (`DateKey`, `CustomerKey`, `ProductKey`, `LocationKey`, `InvoiceNo`).
    - Tạo Index hỗn hợp trên `Dim_Date(Year, Month)` để tăng tốc các truy vấn OLAP tổng hợp theo chu kỳ thời gian.
+
+## 6. CÁC KHỐI TỔNG HỢP OLAP (POSTGRESQL)
+
+Pipeline chính tạo và làm mới các materialized view sau mỗi lần nạp DWH:
+
+| Khối tổng hợp | Hạt dữ liệu | Mục đích |
+|---|---|---|
+| `mv_olap_monthly_sales` | Năm-tháng | Xu hướng doanh thu, roll-up tháng lên quý/năm |
+| `mv_olap_monthly_country_sales` | Năm-tháng-quốc gia | Slice/dice theo thời gian và thị trường; pivot quốc gia |
+| `mv_olap_monthly_product_sales` | Năm-tháng-sản phẩm | Phân tích sản phẩm theo thời gian |
+
+DDL nằm trong `sql/05_olap_aggregate_cubes.sql`. Đây là các khối tổng hợp vật lý
+trên PostgreSQL, không phải bảng Fact thay thế. Mỗi lần chạy lại ETL sẽ refresh sau
+khi Fact và Dimensions được nạp; bộ kiểm thử đối soát tổng doanh thu của cả ba khối
+với `Fact_Sales`.

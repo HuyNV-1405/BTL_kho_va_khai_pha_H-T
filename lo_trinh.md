@@ -97,7 +97,7 @@
 - [x] **Bước 5.1 - Phân khúc khách hàng RFM (Recency, Frequency, Monetary)**:
   - Tính toán chỉ số R, F, M cho 4,338 khách hàng định danh từ `Fact_Sales`.
   - Chia điểm ngũ vị phân (Quantiles 1-5) và phân nhóm 8 phân khúc nghiệp vụ (Champions, Loyal, At Risk, Hibernating, v.v.).
-  - So sánh K-Means với k từ 2 đến 8; chọn **k=2** theo Silhouette Score cao nhất (**0.4328**), độ đồng thuận qua 5 seeds là **99.98%**.
+  - Tách holdout khách hàng 80/20; so sánh K-Means log-RFM k=2..8 với baseline K-Means RFM thô. Lần chạy hiện tại chọn baseline k=2 (holdout Silhouette 0.6010 trong không gian log-RFM chung); xem `outputs/kmeans_holdout_evaluation.csv`. Độ đồng thuận được kiểm tra qua 5 seeds.
 - [x] **Bước 5.2 - Phân tích Giỏ hàng (Market Basket Analysis)**:
   - Chuyển đổi 18,275 đơn hàng đa sản phẩm thành ma trận nhị phân (One-hot Transaction Matrix 18,275 x 3,775).
   - Chạy thuật toán **Apriori** (`min_support = 0.015`) tìm 912 tập mục phổ biến.

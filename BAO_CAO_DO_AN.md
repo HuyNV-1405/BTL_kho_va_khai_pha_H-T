@@ -13,6 +13,7 @@
 6. [GIAI ĐOẠN 5: KHAI PHÁ DỮ LIỆU CHUYÊN SÂU (DATA MINING & ML)](#6-giai-đoạn-5-khai-phá-dữ-liệu-chuyên-sâu-data-mining--ml)
 7. [GIAI ĐOẠN 6: TRỰC QUAN HÓA DASHBOARD (STREAMLIT BI)](#7-giai-đoạn-6-trực-quan-hóa-dashboard-streamlit-bi)
 8. [KẾT LUẬN & ĐỀ XUẤT HƯỚNG MỞ RỘNG](#8-kết-luận--đề-xuất-hướng-mở-rộng)
+9. [PHỤ LỤC: THÔNG TIN NHÓM VÀ KHAI BÁO AI](#9-phụ-lục-thông-tin-nhóm-và-khai-báo-ai)
 
 ---
 
@@ -183,7 +184,7 @@ Script thực hiện: `scripts/06_lakehouse_minio_postgres_etl.py`.
 
 ### 4.2. Kiểm thử tính toàn vẹn (Integrity & Reconciliation)
 - **Ràng buộc khóa ngoại**: **0 lỗi mồ côi** (100% dòng Fact khớp hoàn hảo với 4 bảng Dim).
-- **Kiểm thử và đối soát PostgreSQL**: Bộ kiểm thử tự động gồm 25 phép kiểm tra; hiện tại **25/25 đạt**, bao gồm đối chiếu số dòng, tổng số lượng, doanh thu, khóa ngoại, quy tắc nghiệp vụ và một số lát cắt.
+- **Kiểm thử và đối soát PostgreSQL**: Bộ kiểm thử tự động hiện có **28/28 đạt**, gồm đối chiếu số dòng, tổng số lượng, doanh thu, khóa ngoại, quy tắc nghiệp vụ, các lát cắt và đối soát doanh thu của ba khối tổng hợp.
   - Doanh thu dữ liệu sạch: **£10,642,110.80**.
   - Doanh thu `Fact_Sales`: **£10,642,110.80** (sai lệch **£0.00** ở độ chính xác 2 chữ số thập phân).
 
@@ -196,6 +197,8 @@ Script thực hiện: `sql/04_olap_queries.sql` và `scripts/04_run_olap_queries
 ### 5.1. Các kỹ thuật SQL nâng cao áp dụng
 - **Window Functions**: `LAG()`, `RANK()`, `DENSE_RANK()`, `SUM() OVER(PARTITION BY...)`.
 - **Mô phỏng đa cấp ROLLUP**: Kết hợp CTE và `UNION ALL` để tổng hợp 3 cấp độ (Năm -> Quý -> Tháng).
+- **Hai khối tổng hợp tối thiểu**: `mv_olap_monthly_sales` (năm-tháng) và `mv_olap_monthly_country_sales` (năm-tháng-quốc gia), được ETL refresh sau mỗi lần nạp. Khối thứ ba `mv_olap_monthly_product_sales` phục vụ truy vấn sản phẩm theo thời gian. DDL: `sql/05_olap_aggregate_cubes.sql`.
+- **Năm thao tác OLAP**: `scripts/04_run_olap_queries.py` trình diễn Slice (năm 2011), Dice (quý 4 của UK/Đức), Drill-down (năm đến tháng), Roll-up (tháng lên quý) và Pivot (quốc gia thành cột). Chạy sau ETL để xem kết quả trên dữ liệu hiện tại.
 
 ### 5.2. Các phát hiện kinh doanh then chốt
 1. **Xu hướng mùa vụ**: Doanh thu đạt đỉnh vào **Tháng 11/2011 (£1,503,866.78)**, tăng trưởng MoM **+30.63%**; đây là quan sát trong dữ liệu, phù hợp với mùa mua sắm cuối năm.
@@ -220,8 +223,9 @@ Script thực hiện: `scripts/05_data_mining.py`.
   - **Loyal Customers**: 764 khách hàng, chi tiêu trung bình **£1,827.90/khách**.
   - **At Risk**: 442 khách hàng (nguy cơ rời bỏ).
   - **Hibernating / Lost**: 1,065 khách hàng (ngủ đông / đã rời bỏ).
-- **Phân cụm K-Means**: Áp dụng Log-transform + Z-score scaling và so sánh k từ 2 đến 8. Silhouette cao nhất ở **k = 2 (0.4328)**; k=4 đạt 0.3375 nên không thỏa tiêu chí ưu tiên k=4 trong ngưỡng 95%. Kết quả k=2 ổn định qua 5 random seeds (đồng thuận trung bình 99.98%): cụm Lower Value có 2,672 khách, cụm Higher Value có 1,666 khách.
+- **Phân cụm K-Means**: Tách holdout ngẫu nhiên 80/20 theo khách hàng (seed 42), fit scaler trên train; so sánh K=2..8 của K-Means log-RFM với baseline K-Means RFM chưa log-transform. Cả hai được đánh giá trong cùng không gian log-RFM chuẩn hóa; chọn cấu hình bằng Silhouette train, còn Silhouette holdout chỉ dùng báo cáo. Kết quả chạy hiện tại chọn baseline K-Means RFM thô, K=2 (train **0.5949**, holdout **0.6010**) so với K-Means log-RFM K=2 (train **0.4327**, holdout **0.4331**). Đây là kết quả của metric hình học, không tự khẳng định chất lượng nghiệp vụ; cần diễn giải profile cụm. CSV: `outputs/kmeans_holdout_evaluation.csv`; không dùng nhãn giả hoặc confusion matrix. Mô hình được chọn được fit lại trên toàn bộ khách hàng và kiểm tra độ ổn định qua 5 random seeds.
 - File kết quả: `outputs/rfm_customer_segments.csv`.
+- **Giới hạn diễn giải**: Silhouette và độ ổn định không chứng minh phân khúc làm tăng doanh thu; cần kiểm tra hồ sơ từng cụm và xác nhận với nghiệp vụ trước khi triển khai chiến dịch.
 
 ### 6.2. Phân tích Giỏ hàng (Market Basket Analysis - Apriori)
 - **Tập giao dịch**: 18,275 đơn hàng đa sản phẩm, 3,775 sản phẩm sau loại trừ các dòng phí/phi sản phẩm.
@@ -252,9 +256,25 @@ Script thực hiện: `scripts/05_data_mining.py`.
 ## 8. KẾT LUẬN & ĐỀ XUẤT HƯỚNG MỞ RỘNG
 
 ### 8.1. Kết luận
-Đồ án đã hoàn thành trọn vẹn và đạt chất lượng cao tất cả các yêu cầu từ dữ liệu thô, thiết kế kiến trúc kho dữ liệu chuẩn Kimball, xây dựng pipeline ETL tự động, truy vấn OLAP nâng cao, ứng dụng giải thuật học máy (K-Means, Apriori) đến triển khai Dashboard tương tác hoàn chỉnh.
+Đồ án hiện có luồng dữ liệu từ MinIO qua PostgreSQL DWH đến phân tích OLAP, khai phá và dashboard. Các materialized views và ví dụ năm thao tác OLAP được tạo/cập nhật tự động khi chạy ETL; phần đánh giá K-Means có baseline và holdout. Nhóm cần chạy lại quy trình trên máy sạch, lưu kết quả kiểm thử và hoàn thiện các thông tin đóng góp/trình bày thực tế trong phụ lục trước khi nộp.
 
 ### 8.2. Đề xuất hướng phát triển mở rộng
 1. **Kiến trúc Data Lakehouse trên Đám mây**: Mở rộng lưu trữ trên Snowflake hoặc Google BigQuery để đáp ứng khối lượng dữ liệu hàng trăm triệu dòng.
 2. **Đường ống thời gian thực (Real-time Streaming ETL)**: Tích hợp Apache Kafka và Apache Spark Streaming để xử lý đơn hàng theo thời gian thực (Near Real-Time Analytics).
 3. **Mô hình học máy dự báo (Predictive Analytics)**: Xây dựng thêm mô hình dự báo doanh thu chuỗi thời gian (ARIMA / Prophet / XGBoost) và dự đoán tỷ lệ khách hàng rời bỏ (Customer Churn Prediction).
+
+## 9. PHỤ LỤC: THÔNG TIN NHÓM VÀ KHAI BÁO AI
+
+> Nhóm cần điền tên, phần việc và minh chứng dựa trên đóng góp thực tế. Không giữ dòng mẫu
+> hoặc khai báo thay cho thành viên nếu chưa xác nhận.
+
+| Thành viên | Phần việc chính | Minh chứng/đầu ra | Phần trình bày |
+|---|---|---|---|
+| [Điền tên] | [Điền theo phân công thực tế] | [File/commit/kiểm thử đã thực hiện] | [Nội dung trình bày] |
+| [Thêm dòng theo số thành viên thực tế] | | | |
+
+**Mẫu khai báo công cụ AI (cần nhóm xác nhận và chỉnh theo thực tế):**
+Trong quá trình hoàn thiện dự án, nhóm có sử dụng công cụ AI để hỗ trợ gợi ý,
+debug và biên tập tài liệu/mã nguồn. Nhóm chịu trách nhiệm kiểm tra, chạy thử và
+xác nhận nội dung bàn giao; mọi phần sử dụng AI cần được đối chiếu với quy định môn
+học. Nhóm cần ghi rõ công cụ và phạm vi sử dụng thực tế nếu giảng viên yêu cầu.
