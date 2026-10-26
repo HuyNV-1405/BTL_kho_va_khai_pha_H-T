@@ -5,6 +5,10 @@ Mô tả: Thực thi truy vấn OLAP trên PostgreSQL DWH (SQLite có thể ch�
 
 import os
 import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
 import pandas as pd
 from sqlalchemy import text
 
@@ -313,6 +317,44 @@ def run_olap_analysis(database_url=None):
         ),
     ]
     print("\n\n[OLAP] MINH HỌA ĐỦ 5 THAO TÁC SLICE, DICE, DRILL-DOWN, ROLL-UP, PIVOT")
+    if engine.dialect.name == "sqlite":
+        with engine.begin() as con:
+            con.execute(text("""
+            CREATE VIEW IF NOT EXISTS mv_olap_monthly_sales AS
+            SELECT
+                d.Year AS year, d.Quarter AS quarter, d.Month AS month, d.YearMonth AS yearmonth,
+                COUNT(DISTINCT f.InvoiceNo) AS total_orders,
+                SUM(f.Quantity) AS total_units_sold,
+                SUM(f.TotalRevenue) AS revenue_gbp
+            FROM Fact_Sales f
+            JOIN Dim_Date d ON f.DateKey = d.DateKey
+            GROUP BY d.Year, d.Quarter, d.Month, d.YearMonth;
+            """))
+            con.execute(text("""
+            CREATE VIEW IF NOT EXISTS mv_olap_monthly_country_sales AS
+            SELECT
+                d.Year AS year, d.Quarter AS quarter, d.Month AS month, d.YearMonth AS yearmonth,
+                l.Country AS country,
+                SUM(f.Quantity) AS total_units_sold,
+                SUM(f.TotalRevenue) AS revenue_gbp
+            FROM Fact_Sales f
+            JOIN Dim_Date d ON f.DateKey = d.DateKey
+            JOIN Dim_Location l ON f.LocationKey = l.LocationKey
+            GROUP BY d.Year, d.Quarter, d.Month, d.YearMonth, l.Country;
+            """))
+            con.execute(text("""
+            CREATE VIEW IF NOT EXISTS mv_olap_monthly_product_sales AS
+            SELECT
+                d.Year AS year, d.Quarter AS quarter, d.Month AS month, d.YearMonth AS yearmonth,
+                p.StockCode AS stockcode, p.Description AS description,
+                SUM(f.Quantity) AS total_units_sold,
+                SUM(f.TotalRevenue) AS revenue_gbp
+            FROM Fact_Sales f
+            JOIN Dim_Date d ON f.DateKey = d.DateKey
+            JOIN Dim_Product p ON f.ProductKey = p.ProductKey
+            GROUP BY d.Year, d.Quarter, d.Month, d.YearMonth, p.StockCode, p.Description;
+            """))
+
     for operation, explanation, query in olap_demos:
         print(f"\n[{operation}] {explanation}")
         with engine.connect() as conn:

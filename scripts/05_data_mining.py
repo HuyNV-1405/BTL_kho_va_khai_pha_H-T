@@ -7,6 +7,10 @@ Mô tả: Giai đoạn 5 - Khai phá dữ liệu chuyên sâu (Data Mining & Mac
 
 import os
 import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split

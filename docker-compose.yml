@@ -3,7 +3,7 @@ services:
   # 1. MINIO (DATA LAKE S3 COMPATIBLE)
   # ----------------------------------------------------------------------------
   minio:
-    image: quay.io/minio/minio:latest
+    image: cgr.dev/chainguard/minio:latest
     container_name: dwh_minio
     restart: always
     ports:
@@ -15,26 +15,6 @@ services:
     command: server /data --console-address ":9001"
     volumes:
       - minio_data:/data
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
-  # Tự động tạo 3 buckets: raw, staging, curated
-  minio-init:
-    image: quay.io/minio/mc:latest
-    container_name: dwh_minio_init
-    depends_on:
-      - minio
-    entrypoint: >
-      /bin/sh -c "
-      sleep 3;
-      mc alias set local http://minio:9000 minioadmin minioadmin123;
-      mc mb -p local/raw local/staging local/curated;
-      echo '✅ Buckets [raw, staging, curated] initialized successfully!';
-      exit 0;
-      "
 
   # ----------------------------------------------------------------------------
   # 2. POSTGRESQL (DATA WAREHOUSE DATABASE)

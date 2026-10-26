@@ -87,6 +87,32 @@ E:\ổ D\Kho\B\
 
 ## 🛠️ HƯỚNG DẪN KHỞI CHẠY HỆ THỐNG
 
+### ⚡ CÁCH 1: KHỞI CHẠY TỰ ĐỘNG BẰNG 1 CÂU LỆNH DUY NHẤT (KHUYẾN NGHỊ BÁO CÁO)
+
+Hệ thống được trang bị script điều phối master tự động hóa 100% các bước (Bật Docker -> API -> ETL MinIO -> Star Schema DWH -> Kiểm thử 25 Test Cases -> OLAP -> Data Mining -> Mở Web Dashboard):
+
+- **Cách 1 (Windows CMD / Nhấp đúp chuột):**
+  ```bat
+  run.bat
+  ```
+- **Cách 2 (PowerShell):**
+  ```powershell
+  .\run.ps1
+  ```
+- **Cách 3 (Python trực tiếp):**
+  ```powershell
+  python run_all.py
+  ```
+
+> **Các tùy chọn bổ trợ hữu ích:**
+> - `python run_all.py --skip-etl`: Bỏ qua nạp ETL nếu dữ liệu DWH đã có sẵn, chỉ chạy phân tích & mở Dashboard.
+> - `python run_all.py --sqlite`: Tự động chạy chế độ cục bộ SQLite (dành cho máy không cài Docker).
+> - `python run_all.py --only-dashboard`: Chỉ mở nhanh Streamlit Web App.
+
+---
+
+### 📝 CÁCH 2: CHẠY THỦ CÔNG TỪNG BƯỚC
+
 1. **Khởi động hạ tầng Lakehouse**:
    ```bash
    docker compose up -d
